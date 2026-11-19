@@ -10,6 +10,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
+  const isInbox = pathname === "/inbox" || pathname === "/dashboard/inbox";
 
   if (pathname === "/login") return <>{children}</>;
 
@@ -22,11 +23,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         onClose={() => setMobileOpen(false)}
       />
       <div className={`min-h-screen transition-[padding] duration-300 ${collapsed ? "lg:pl-[88px]" : "lg:pl-[264px]"}`}>
-        <AppHeader onMenuClick={() => setMobileOpen(true)} />
-        <main className="mx-auto w-full max-w-[1600px] px-4 pb-10 pt-6 sm:px-6 lg:px-9 lg:pt-8">
+        {!isInbox && <AppHeader onMenuClick={() => setMobileOpen(true)} />}
+        <main className={isInbox
+          ? "h-screen w-full p-3 sm:p-4"
+          : "mx-auto w-full max-w-[1600px] px-4 pb-10 pt-6 sm:px-6 lg:px-9 lg:pt-8"
+        }>
           <AnimatePresence mode="wait">
             <motion.div
               key={pathname}
+              className={isInbox ? "h-full" : undefined}
               initial={{ opacity: 0, y: 5 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -3 }}

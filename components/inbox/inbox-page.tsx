@@ -514,14 +514,10 @@ export function InboxPage({ initialConversationId = "" }: { initialConversationI
   ) : null;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div><h2 className="text-[22px] font-semibold tracking-[-0.04em]">WhatsApp Inbox</h2><p className="mt-1 text-xs text-[var(--muted)]">Incoming replies and manual customer conversations.</p></div>
-        <a href="/dashboard/settings/whatsapp" className="text-[11px] font-semibold text-[var(--accent)]">Connection settings</a>
-      </div>
+    <div className="flex h-full min-h-0 flex-col gap-3">
       {notice && <div role="status" className="flex items-start justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-xs"><span>{notice}</span><button aria-label="Dismiss message" onClick={() => setNotice("")}><X size={14} /></button></div>}
 
-      <section className="grid min-h-[min(760px,calc(100vh-190px))] overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm lg:grid-cols-[290px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)_270px]">
+      <section className="grid min-h-0 flex-1 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm lg:grid-cols-[290px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)_270px]">
         <aside className={`${mobileChatOpen ? "hidden lg:flex" : "flex"} min-h-[520px] flex-col border-r border-[var(--border)]`}>
           <div className="border-b border-[var(--border)] p-4">
             <label className="flex h-9 items-center gap-2 rounded-lg bg-[var(--surface-muted)] px-3 text-[var(--muted)]">

@@ -22,6 +22,10 @@ const campaignSchema = new Schema(
       index: true
     },
     templateId: { type: Schema.Types.ObjectId, ref: "MessageTemplate", default: null },
+    templateName: { type: String, default: "", maxlength: 512 },
+    templateLanguage: { type: String, default: "", maxlength: 20 },
+    templateCategory: { type: String, default: "", maxlength: 40 },
+    templateBody: { type: String, default: "", maxlength: 1024 },
     variableMappings: { type: [variableMappingSchema], default: [] },
     status: {
       type: String,
@@ -30,7 +34,10 @@ const campaignSchema = new Schema(
       index: true
     },
     dispatchVersion: { type: Number, default: 1 },
-    dispatchStatus: { type: String, enum: ["pending", "processing", "completed"], default: "pending" },
+    dispatchStatus: { type: String, enum: ["pending", "processing", "completed", "failed"], default: "pending" },
+    queueConfirmedAt: { type: Date, default: null },
+    errorCode: { type: String, default: "", maxlength: 100 },
+    errorMessage: { type: String, default: "", maxlength: 1000 },
     totalRecipients: { type: Number, default: 0 },
     eligibleRecipients: { type: Number, default: 0 },
     excludedRecipients: { type: Number, default: 0 },

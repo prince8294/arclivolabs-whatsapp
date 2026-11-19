@@ -265,9 +265,13 @@ export async function POST(request: NextRequest) {
   }
 
   let appSecret = "";
+  let configuredWabaId = "";
+  let configuredPhoneNumberId = "";
   try {
     const { credentials } = await getEffectiveCredentials();
     appSecret = credentials.appSecret;
+    configuredWabaId = credentials.wabaId;
+    configuredPhoneNumberId = credentials.phoneNumberId;
   } catch {
     return NextResponse.json({ error: "Webhook signature verification is not configured." }, { status: 503 });
   }
@@ -289,7 +293,7 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Webhook body must be valid JSON." }, { status: 400 });
   }
-  if (!isRecord(payload) || !Array.isArray(payload.entry)) {
+  if (!isRecord(payload) || payload.object !== "whatsapp_business_account" || !Array.isArray(payload.entry)) {
     return NextResponse.json({ error: "Webhook payload is invalid." }, { status: 400 });
   }
 
@@ -297,9 +301,12 @@ export async function POST(request: NextRequest) {
     await connectToDatabase();
     for (const entry of payload.entry) {
       if (!isRecord(entry) || !Array.isArray(entry.changes)) continue;
+      if (stringValue(entry.id) !== configuredWabaId) continue;
       for (const change of entry.changes) {
         if (!isRecord(change) || !isRecord(change.value)) continue;
         const value = change.value;
+        const metadata = isRecord(value.metadata) ? value.metadata : null;
+        if (metadata && stringValue(metadata.phone_number_id) !== configuredPhoneNumberId) continue;
         if (change.field === "message_template_status_update") {
           await storeTemplateStatus(value);
         }

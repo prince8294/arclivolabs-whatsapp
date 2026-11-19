@@ -1,10 +1,8 @@
 import type { Job } from "bullmq";
-import { Types } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongodb";
-import { scanAudience, type EligibleRecipient } from "@/lib/campaigns/audience";
 import { refreshCampaignCounts } from "@/lib/campaigns/counts";
 import { applyCampaignDeliveryStatus } from "@/lib/campaigns/delivery";
-import { enqueueRecipients, enqueueCampaignDispatch } from "@/lib/campaigns/queue";
+import { enqueueRecipients } from "@/lib/campaigns/queue";
 import Campaign from "@/lib/models/campaign";
 import CampaignRecipient from "@/lib/models/campaign-recipient";
 import Contact from "@/lib/models/contact";
@@ -24,96 +22,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function recipientDocument(campaignId: string, recipient: EligibleRecipient) {
-  return {
-    campaignId: new Types.ObjectId(campaignId),
-    contactId: recipient.contactId,
-    phoneNumber: recipient.phoneNumber,
-    businessName: recipient.businessName,
-    contactPerson: recipient.contactPerson,
-    categoryId: recipient.categoryId,
-    categoryName: recipient.categoryName,
-    city: recipient.city,
-    templateVariables: recipient.templateVariables
-  };
-}
-
-async function dispatchCampaign({ campaignId }: DispatchData) {
+async function quarantineLegacyDispatch({ campaignId }: DispatchData) {
   await connectToDatabase();
-  const campaign = await Campaign.findById(campaignId);
+  const campaign = await Campaign.findById(campaignId).lean();
   if (!campaign || !["Queued", "Processing"].includes(campaign.status)) return;
-  const template = campaign.templateId ? await MessageTemplate.findById(campaign.templateId) : null;
-  if (!template || template.isDraft || template.metaStatus !== "APPROVED") {
+  const [recipientCount, messageCount] = await Promise.all([
+    CampaignRecipient.countDocuments({ campaignId }),
+    WhatsAppMessage.countDocuments({ campaignId })
+  ]);
+  if (!recipientCount && !messageCount) {
     await Campaign.updateOne(
-      { _id: campaignId, status: { $in: ["Queued", "Processing"] } },
-      { $set: { status: "Failed", dispatchStatus: "completed", completedAt: new Date() } }
+      { _id: campaignId, status: { $in: ["Queued", "Processing"] }, dispatchStatus: { $ne: "completed" } },
+      {
+        $set: {
+          status: "Failed",
+          dispatchStatus: "failed",
+          errorCode: "RECIPIENT_SNAPSHOT_MISSING",
+          errorMessage: "This legacy campaign had no durable recipient snapshot and was not sent. Create a new campaign with the correct Marketing template.",
+          completedAt: new Date()
+        }
+      }
     );
-    return;
+    console.error("Legacy campaign quarantined because its recipient snapshot was missing.", { campaignId });
   }
-  campaign.dispatchStatus = "processing";
-  await campaign.save();
-  const options = {
-    categoryIds: campaign.categoryIds.map((id) => id.toString()),
-    cities: campaign.cities,
-    variableMappings: campaign.variableMappings.map((item) => ({
-      number: item.number,
-      mapping: item.mapping as "contactPerson" | "businessName" | "city"
-    })),
-    body: template.body
-  };
-  for await (const batch of scanAudience(options)) {
-    const current = await Campaign.findById(campaignId).select("status").lean();
-    if (!current || !["Queued", "Processing"].includes(current.status)) return;
-    const operations = [
-      ...batch.eligible.map((recipient) => ({
-        updateOne: {
-          filter: { campaignId: new Types.ObjectId(campaignId), contactId: recipient.contactId },
-          update: { $setOnInsert: recipientDocument(campaignId, recipient) },
-          upsert: true
-        }
-      })),
-      ...batch.excluded.map((recipient) => ({
-        updateOne: {
-          filter: { campaignId: new Types.ObjectId(campaignId), contactId: recipient.contactId },
-          update: {
-            $setOnInsert: {
-              campaignId: new Types.ObjectId(campaignId),
-              contactId: recipient.contactId,
-              phoneNumber: recipient.phoneNumber,
-              businessName: recipient.businessName,
-              contactPerson: recipient.contactPerson,
-              categoryId: recipient.categoryId,
-              categoryName: recipient.categoryName,
-              city: recipient.city,
-              queueStatus: "excluded" as const,
-              errorCode: recipient.errorCode,
-              errorMessage: recipient.errorMessage
-            }
-          },
-          upsert: true
-        }
-      }))
-    ];
-    if (operations.length) await CampaignRecipient.bulkWrite(operations, { ordered: false });
-    const ids = batch.eligible.map((recipient) => recipient.contactId);
-    if (ids.length) {
-      const saved = await CampaignRecipient.find({
-        campaignId,
-        contactId: { $in: ids },
-        queueStatus: "queued"
-      }).select("_id queueVersion").lean();
-      await enqueueRecipients(saved.map((recipient) => ({
-        campaignId,
-        recipientId: String(recipient._id),
-        version: recipient.queueVersion
-      })));
-    }
-  }
-  await Campaign.updateOne(
-    { _id: campaignId, status: { $in: ["Queued", "Processing"] } },
-    { $set: { dispatchStatus: "completed" } }
-  );
-  await refreshCampaignCounts(campaignId);
 }
 
 async function failRecipient(recipientId: string, code: string, message: string, queueStatus = "failed") {
@@ -184,7 +115,15 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
   }
 
   const template = !isFreeFormCsv && campaign.templateId ? await MessageTemplate.findById(campaign.templateId).lean() : null;
-  if (!isFreeFormCsv && (!template || template.isDraft || template.metaStatus !== "APPROVED" || !template.metaTemplateId)) {
+  const snapshotTemplateValid = Boolean(
+    recipient.templateName &&
+    recipient.templateLanguage &&
+    recipient.templateCategory === "MARKETING"
+  );
+  const liveTemplateValid = Boolean(
+    template && !template.isDraft && template.metaStatus === "APPROVED" && template.metaTemplateId
+  );
+  if (!isFreeFormCsv && !snapshotTemplateValid && !liveTemplateValid) {
     await failRecipient(recipientId, "TEMPLATE_NOT_APPROVED", "The selected template is no longer approved by Meta.");
     return;
   }
@@ -265,8 +204,8 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
       to: recipient.phoneNumber.replace(/^\+/, ""),
       type: "template",
       template: {
-        name: template!.name,
-        language: { code: template!.language },
+        name: recipient.templateName || template!.name,
+        language: { code: recipient.templateLanguage || template!.language },
         ...(components.length ? { components } : {})
       }
     };
@@ -289,10 +228,14 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
     const deliveryStatus = ["accepted", "sent", "delivered", "read", "failed"].includes(reported) ? reported : "accepted";
     const rank = { accepted: 0, sent: 1, delivered: 2, read: 3, failed: 2 }[deliveryStatus as "accepted" | "sent" | "delivered" | "read" | "failed"];
     const errorCode = deliveryStatus === "failed" ? "META_MESSAGE_FAILED" : "";
-    const renderedBody = isFreeFormCsv ? recipient.originalCsvMessage : template!.body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, number: string) =>
-      recipient.templateVariables[Number(number) - 1] ?? ""
-    );
-    const finalRenderedMessage = isFreeFormCsv ? renderedBody : [template!.header, renderedBody, template!.footer].filter(Boolean).join("\n\n");
+    const renderedBody = isFreeFormCsv
+      ? recipient.originalCsvMessage
+      : recipient.renderedMessage || template!.body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, number: string) =>
+        recipient.templateVariables[Number(number) - 1] ?? ""
+      );
+    const finalRenderedMessage = isFreeFormCsv
+      ? renderedBody
+      : recipient.renderedMessage || [template!.header, renderedBody, template!.footer].filter(Boolean).join("\n\n");
     await WhatsAppMessage.updateOne(
       { messageId },
       {
@@ -304,7 +247,10 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
           contactName: recipient.contactPerson,
           messageType: isFreeFormCsv ? "text" : "template",
           content: finalRenderedMessage,
-          metadata: isFreeFormCsv ? { source: "personalized_csv" } : { templateName: template!.name, templateLanguage: template!.language },
+          metadata: isFreeFormCsv ? { source: "personalized_csv" } : {
+            templateName: recipient.templateName || template!.name,
+            templateLanguage: recipient.templateLanguage || template!.language
+          },
           direction: "outgoing",
           contactId: recipient.contactId
         },
@@ -376,12 +322,12 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
 
 export async function recoverQueuedWork() {
   await connectToDatabase();
-  const campaigns = await Campaign.find({
+  const legacyCampaigns = await Campaign.find({
     status: { $in: ["Queued", "Processing"] },
     dispatchStatus: { $in: ["pending", "processing"] }
-  }).select("_id dispatchVersion").lean();
-  for (const campaign of campaigns) {
-    await enqueueCampaignDispatch(String(campaign._id), campaign.dispatchVersion);
+  }).select("_id").lean();
+  for (const campaign of legacyCampaigns) {
+    await quarantineLegacyDispatch({ campaignId: String(campaign._id) });
   }
   const activeCampaignIds = await Campaign.find({ status: { $in: ["Queued", "Processing"] } }).distinct("_id");
   if (!activeCampaignIds.length) return;
@@ -406,7 +352,8 @@ export async function recoverQueuedWork() {
 }
 
 export async function processCampaignJob(job: Job) {
-  if (job.name === "dispatch-campaign") return dispatchCampaign(job.data as DispatchData);
+  if (job.name === "health-probe") return;
+  if (job.name === "dispatch-campaign") return quarantineLegacyDispatch(job.data as DispatchData);
   if (job.name === "send-recipient") return sendRecipient(job.data as RecipientData, job);
   throw new Error(`Unknown campaign job: ${job.name}`);
 }
@@ -415,7 +362,8 @@ export async function enqueueResumeWork(campaignId: string) {
   const campaign = await Campaign.findById(campaignId).select("dispatchStatus dispatchVersion").lean();
   if (!campaign) return;
   if (campaign.dispatchStatus !== "completed") {
-    await enqueueCampaignDispatch(campaignId, campaign.dispatchVersion);
+    await quarantineLegacyDispatch({ campaignId });
+    return;
   }
   const paused = await CampaignRecipient.find({ campaignId, queueStatus: "paused" }).select("_id queueVersion").lean();
   const entries = paused.map((item) => ({

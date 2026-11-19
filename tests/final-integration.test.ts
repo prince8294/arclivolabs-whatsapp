@@ -5,6 +5,7 @@ import { NextRequest } from "next/server";
 import { middleware } from "../middleware";
 import { percentage, safeCsvCell } from "../lib/analytics/reporting";
 import { hasActiveCustomerServiceWindow, hasRequiredTemplateVariables, normalizeImportedConsent, parsePersonalizedRows, renderApprovedTemplate } from "../lib/campaigns/personalized";
+import { normalizedRedisUrl, sendJobId } from "../lib/campaigns/queue";
 
 const originalAdminEmail = process.env.ADMIN_EMAIL;
 const originalAuthSecret = process.env.AUTH_SECRET;
@@ -94,4 +95,21 @@ test("free-form windows and required template variables are evaluated per recipi
   assert.equal(hasActiveCustomerServiceWindow(new Date(now + 1000), now), false);
   assert.equal(hasRequiredTemplateVariables("Hello {{1}}, help {{2}} with {{3}}", ["ABC", "School", "Admissions"]), true);
   assert.equal(hasRequiredTemplateVariables("Hello {{1}}, help {{2}} with {{3}}", ["ABC", "", "Admissions"]), false);
+});
+
+test("Redis configuration accepts TLS URLs and safely extracts the URL from an Upstash CLI command", () => {
+  assert.equal(
+    normalizedRedisUrl("rediss://default:secret@example.upstash.io:6379"),
+    "rediss://default:secret@example.upstash.io:6379"
+  );
+  assert.equal(
+    normalizedRedisUrl("redis-cli --tls -u redis://default:secret@example.upstash.io:6379"),
+    "rediss://default:secret@example.upstash.io:6379"
+  );
+  assert.throws(() => normalizedRedisUrl("redis-cli --tls example.upstash.io"), /REDIS_URL/);
+});
+
+test("recipient queue job IDs are deterministic across recovery runs", () => {
+  assert.equal(sendJobId("recipient-id", 1), sendJobId("recipient-id", 1));
+  assert.notEqual(sendJobId("recipient-id", 1), sendJobId("recipient-id", 2));
 });

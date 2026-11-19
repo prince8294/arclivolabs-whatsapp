@@ -19,6 +19,9 @@ const campaignRecipientSchema = new Schema(
     },
     originalCsvMessage: { type: String, default: "", maxlength: 4096 },
     templateId: { type: Schema.Types.ObjectId, ref: "MessageTemplate", default: null },
+    templateName: { type: String, default: "", maxlength: 512 },
+    templateLanguage: { type: String, default: "", maxlength: 20 },
+    templateCategory: { type: String, default: "", maxlength: 40 },
     templateVariables: { type: [String], default: [] },
     renderedMessage: { type: String, default: "", maxlength: 4096 },
     eligibilityStatus: {

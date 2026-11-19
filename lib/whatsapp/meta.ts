@@ -20,7 +20,7 @@ export class MetaApiError extends Error {
 
 function responseError(status: number, graphError?: GraphError): MetaApiError {
   const metaCode = typeof graphError?.code === "number" ? graphError.code : 0;
-  if (status === 429 || metaCode === 4 || metaCode === 17 || metaCode === 32) {
+  if (status === 429 || [4, 17, 32, 130429].includes(metaCode)) {
     return new MetaApiError("Meta is rate limiting requests. Wait a moment and try again.", "META_RATE_LIMIT", 429);
   }
   if (status === 401 || metaCode === 190) {
@@ -34,6 +34,21 @@ function responseError(status: number, graphError?: GraphError): MetaApiError {
   }
   if (status >= 500) {
     return new MetaApiError("Meta is temporarily unavailable. Try again shortly.", "META_UNAVAILABLE", 503);
+  }
+  if (metaCode === 132000) {
+    return new MetaApiError("Meta rejected the message because the template variables do not match the approved template.", "META_TEMPLATE_VARIABLE_MISMATCH", 400);
+  }
+  if (metaCode === 132001) {
+    return new MetaApiError("Meta could not find the approved template for the requested name and language.", "META_TEMPLATE_NOT_FOUND", 400);
+  }
+  if (metaCode === 131026) {
+    return new MetaApiError("Meta could not deliver this message to the recipient.", "META_UNDELIVERABLE", 400);
+  }
+  if (metaCode === 131047) {
+    return new MetaApiError("Meta rejected this non-template message because the customer service window is closed.", "META_WINDOW_RESTRICTED", 400);
+  }
+  if (metaCode === 131049) {
+    return new MetaApiError("Meta did not deliver this Marketing message under its engagement safeguards.", "META_MARKETING_RESTRICTED", 400);
   }
   if (metaCode === 100 || metaCode === 803 || (typeof graphError?.error_subcode === "number" && graphError.error_subcode > 0)) {
     return new MetaApiError("Meta rejected the account, phone number, or request configuration.", "META_INVALID_CONFIGURATION", 400);

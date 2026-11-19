@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "bullmq": "^6.7.7",
+    "dotenv": "^16.4.7",
     "framer-motion": "^11.11.17",
     "ioredis": "^6.0.0",
     "libphonenumber-js": "^1.11.20",

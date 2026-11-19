@@ -36,11 +36,12 @@ export async function GET(request: NextRequest) {
       );
       if (!local) continue;
       const status = typeof remote.status === "string" ? remote.status.toUpperCase() : "";
+      const category = typeof remote.category === "string" ? remote.category.toUpperCase() : "";
       const components = supportedTemplateComponents(remote.components);
-      if (status !== "APPROVED" || !components) {
+      if (status !== "APPROVED" || category !== "MARKETING" || !components) {
         await MessageTemplate.updateOne(
           { _id: local._id },
-          { $set: { metaStatus: status, lastSyncedAt: new Date() } }
+          { $set: { metaStatus: status, metaCategory: category || local.metaCategory, lastSyncedAt: new Date() } }
         );
         continue;
       }
@@ -57,7 +58,7 @@ export async function GET(request: NextRequest) {
         businessCategoryId: local.businessCategoryId?.toString() ?? "",
         businessCategory: local.businessCategoryId ? categoryNames.get(String(local.businessCategoryId)) ?? "" : "",
         language: remoteLanguage,
-        metaCategory: typeof remote.category === "string" ? remote.category : local.metaCategory,
+        metaCategory: category,
         metaStatus: status,
         body: components.body,
         header: components.header,
@@ -69,7 +70,7 @@ export async function GET(request: NextRequest) {
       });
       await MessageTemplate.updateOne(
         { _id: local._id },
-        { $set: { metaStatus: status, lastSyncedAt: new Date() } }
+        { $set: { metaStatus: status, metaCategory: category, lastSyncedAt: new Date() } }
       );
     }
     return NextResponse.json({ templates: choices });

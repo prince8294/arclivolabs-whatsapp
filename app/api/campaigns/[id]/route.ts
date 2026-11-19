@@ -4,7 +4,9 @@ import { isAdminSessionValid, isSameOriginRequest } from "@/lib/auth/admin-sessi
 import { connectToDatabase } from "@/lib/db/mongodb";
 import { parseCampaignInput } from "@/lib/campaigns/input";
 import { refreshCampaignCounts } from "@/lib/campaigns/counts";
+import { verifyQueueInfrastructure } from "@/lib/campaigns/queue";
 import Campaign from "@/lib/models/campaign";
+import CampaignRecipient from "@/lib/models/campaign-recipient";
 import Category from "@/lib/models/category";
 import MessageTemplate from "@/lib/models/message-template";
 
@@ -23,18 +25,36 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
     if (!refreshed) return NextResponse.json({ error: { code: "NOT_FOUND", message: "Campaign was not found." } }, { status: 404 });
     const [categories, template] = await Promise.all([
       Category.find({ _id: { $in: refreshed.categoryIds } }).select("name").lean(),
-      refreshed.templateId ? MessageTemplate.findById(refreshed.templateId).select("name,language,metaStatus,body").lean() : null
+      refreshed.templateId ? MessageTemplate.findById(refreshed.templateId).select("name language metaStatus metaCategory body").lean() : null
     ]);
+    let operationalError = "";
+    if (["Queued", "Processing"].includes(refreshed.status)) {
+      try {
+        const queue = await verifyQueueInfrastructure(false);
+        if (!queue.worker) operationalError = "Background worker unavailable. Queued recipients are safe but will not be processed until the persistent worker is restored.";
+      } catch {
+        operationalError = "Redis connection failed. Queued recipients are safe but cannot be processed until Redis is restored.";
+      }
+    }
     return NextResponse.json({
       campaign: {
         ...refreshed,
         _id: String(refreshed._id),
+        operationalError,
         categoryNames: categories.map((item) => item.name),
-        template: template ? {
+        template: refreshed.templateName ? {
+          _id: refreshed.templateId ? String(refreshed.templateId) : "",
+          name: refreshed.templateName,
+          language: refreshed.templateLanguage,
+          metaStatus: template?.metaStatus || "SNAPSHOT",
+          metaCategory: refreshed.templateCategory,
+          body: refreshed.templateBody
+        } : template ? {
           _id: String(refreshed.templateId),
           name: template.name,
           language: template.language,
           metaStatus: template.metaStatus,
+          metaCategory: template.metaCategory,
           body: template.body
         } : null
       }
@@ -81,6 +101,7 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
     current.templateId = parsed.value.templateId ? new Types.ObjectId(parsed.value.templateId) : null;
     current.set("variableMappings", parsed.value.variableMappings);
     await current.save();
+    await CampaignRecipient.deleteMany({ campaignId: current._id });
     return NextResponse.json({ campaign: { _id: current._id.toString(), name: current.name, status: current.status } });
   } catch (error) {
     console.error("Campaign draft could not be updated.", error);

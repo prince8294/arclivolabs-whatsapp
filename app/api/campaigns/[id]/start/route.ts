@@ -3,12 +3,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAdminSessionValid, isSameOriginRequest } from "@/lib/auth/admin-session";
 import { connectToDatabase } from "@/lib/db/mongodb";
 import Campaign from "@/lib/models/campaign";
+import CampaignRecipient from "@/lib/models/campaign-recipient";
 import MessageTemplate from "@/lib/models/message-template";
 import { extractTemplateVariables } from "@/lib/templates/validation";
 import { getStoredConnection, getEffectiveCredentials, markConnectionError } from "@/lib/whatsapp/config";
 import { MetaApiError } from "@/lib/whatsapp/meta";
-import { enqueueCampaignDispatch } from "@/lib/campaigns/queue";
+import { enqueueRecipients, verifyQueueInfrastructure } from "@/lib/campaigns/queue";
 import { listMetaTemplates, supportedTemplateComponents } from "@/lib/campaigns/meta-templates";
+import { createCampaignRecipientSnapshot } from "@/lib/campaigns/snapshot";
 
 type RouteContext = { params: { id: string } };
 
@@ -52,11 +54,10 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       return NextResponse.json({ error: { code: "NOT_CONNECTED", message: "Verify the WhatsApp connection before starting a campaign." } }, { status: 409 });
     }
     if (isPersonalizedImport) {
-      const eligible = await import("@/lib/models/campaign-recipient").then(({ default: CampaignRecipient }) =>
-        CampaignRecipient.countDocuments({ campaignId: campaign._id, queueStatus: "queued" })
-      );
+      const eligible = await CampaignRecipient.countDocuments({ campaignId: campaign._id, queueStatus: "queued" });
       if (!eligible) return NextResponse.json({ error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "No reviewed recipients are eligible to enter the queue." } }, { status: 400 });
     }
+    let snapshotCounts: { total: number; eligible: number; excluded: number } | null = null;
     if (!isFreeFormCsv) {
       const template = await MessageTemplate.findById(campaign.templateId);
       if (!template || template.isDraft || !template.metaTemplateId) {
@@ -77,6 +78,15 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         }
         return NextResponse.json({ error: { code: "TEMPLATE_NOT_APPROVED", message: "Meta does not currently report this template as approved. Refresh its status and choose an approved template." } }, { status: 409 });
       }
+      const remoteCategory = typeof remote.category === "string" ? remote.category.toUpperCase() : "";
+      if (remoteCategory !== "MARKETING") {
+        return NextResponse.json({
+          error: {
+            code: "MARKETING_TEMPLATE_REQUIRED",
+            message: "Bulk promotional campaigns require an approved Marketing template. Utility confirmation templates cannot be used."
+          }
+        }, { status: 400 });
+      }
       const components = supportedTemplateComponents(remote.components);
       const unsupportedComponentVariables = components && [
         components.header,
@@ -95,6 +105,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       }
 
       template.metaStatus = remote.status;
+      template.metaCategory = remoteCategory;
       template.body = components.body;
       template.header = components.header;
       template.footer = components.footer;
@@ -102,6 +113,65 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       template.variables = variables;
       template.lastSyncedAt = new Date();
       await template.save();
+      campaign.templateName = template.name;
+      campaign.templateLanguage = template.language;
+      campaign.templateCategory = template.metaCategory;
+      campaign.templateBody = template.body;
+      await campaign.save();
+
+      if (isPersonalizedImport) {
+        await CampaignRecipient.updateMany(
+          { campaignId: campaign._id, templateId: template._id },
+          {
+            $set: {
+              templateName: template.name,
+              templateLanguage: template.language,
+              templateCategory: template.metaCategory
+            }
+          }
+        );
+      }
+
+      if (!isPersonalizedImport) {
+        try {
+          await verifyQueueInfrastructure(true);
+        } catch (error) {
+          const workerUnavailable = error instanceof Error && error.message.includes("heartbeat");
+          console.error(workerUnavailable ? "Campaign worker is unavailable." : "Redis connectivity check failed.", {
+            error: error instanceof Error ? error.message : "Unknown queue error"
+          });
+          return NextResponse.json({
+            error: {
+              code: workerUnavailable ? "WORKER_UNAVAILABLE" : "REDIS_CONNECTION_FAILED",
+              message: workerUnavailable
+                ? "The persistent campaign worker is not running. Start or restore the worker before launching this campaign."
+                : "Redis could not be reached. Check REDIS_URL, TLS, and the Redis service before launching this campaign."
+            }
+          }, { status: 503 });
+        }
+        snapshotCounts = await createCampaignRecipientSnapshot(campaign, template);
+        if (!snapshotCounts.eligible) {
+          return NextResponse.json({
+            error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "No contacts have valid current consent and all required template values." }
+          }, { status: 400 });
+        }
+      }
+    }
+
+    if (isPersonalizedImport) {
+      try {
+        await verifyQueueInfrastructure(true);
+      } catch (error) {
+        const workerUnavailable = error instanceof Error && error.message.includes("heartbeat");
+        return NextResponse.json({
+          error: {
+            code: workerUnavailable ? "WORKER_UNAVAILABLE" : "REDIS_CONNECTION_FAILED",
+            message: workerUnavailable
+              ? "The persistent campaign worker is not running. Start or restore it before launching this campaign."
+              : "Redis could not be reached. Check REDIS_URL and TLS before launching this campaign."
+          }
+        }, { status: 503 });
+      }
     }
 
     const started = await Campaign.findOneAndUpdate(
@@ -109,14 +179,17 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       {
         $set: {
           status: "Queued",
-          dispatchStatus: isPersonalizedImport ? "completed" : "pending",
+          dispatchStatus: "completed",
           startedAt: new Date(),
           completedAt: null,
+          queueConfirmedAt: null,
+          errorCode: "",
+          errorMessage: "",
           ...(isPersonalizedImport ? {} : {
-            totalRecipients: 0,
-            eligibleRecipients: 0,
-            excludedRecipients: 0,
-            queuedCount: 0,
+            totalRecipients: snapshotCounts?.total ?? 0,
+            eligibleRecipients: snapshotCounts?.eligible ?? 0,
+            excludedRecipients: snapshotCounts?.excluded ?? 0,
+            queuedCount: snapshotCounts?.eligible ?? 0,
             pausedCount: 0,
             processingCount: 0,
             acceptedCount: 0,
@@ -133,17 +206,29 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       return NextResponse.json({ error: { code: "CAMPAIGN_ALREADY_STARTED", message: "This campaign was already started." } }, { status: 409 });
     }
     try {
-      if (isPersonalizedImport) {
-        const recipients = await import("@/lib/models/campaign-recipient").then(({ default: CampaignRecipient }) =>
-          CampaignRecipient.find({ campaignId: started._id, queueStatus: "queued" }).select("_id queueVersion").lean()
-        );
-        const { enqueueRecipients } = await import("@/lib/campaigns/queue");
-        await enqueueRecipients(recipients.map((recipient) => ({ campaignId: String(started._id), recipientId: String(recipient._id), version: recipient.queueVersion })));
-      } else {
-        await enqueueCampaignDispatch(String(started._id), started.dispatchVersion);
-      }
+      const recipients = await CampaignRecipient.find({ campaignId: started._id, queueStatus: "queued" })
+        .select("_id queueVersion")
+        .lean();
+      await enqueueRecipients(recipients.map((recipient) => ({
+        campaignId: String(started._id),
+        recipientId: String(recipient._id),
+        version: recipient.queueVersion
+      })));
+      await Campaign.updateOne(
+        { _id: started._id, status: { $in: ["Queued", "Processing"] } },
+        { $set: { queueConfirmedAt: new Date(), errorCode: "", errorMessage: "" } }
+      );
     } catch (error) {
       console.error("Campaign dispatch could not be confirmed in Redis.", error);
+      await Campaign.updateOne(
+        { _id: started._id },
+        {
+          $set: {
+            errorCode: "QUEUE_DISPATCH_FAILED",
+            errorMessage: "Recipient snapshots are safe, but Redis did not confirm their queue jobs. Restore the worker; do not start this campaign again."
+          }
+        }
+      );
       return NextResponse.json({
         error: {
           code: "QUEUE_UNAVAILABLE",

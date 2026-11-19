@@ -9,7 +9,7 @@ type CampaignRecord = {
   name: string;
   description: string;
   categoryNames: string[];
-  template: { name: string; language: string; metaStatus: string; body: string } | null;
+  template: { name: string; language: string; metaStatus: string; metaCategory: string; body: string } | null;
   messageMode: string;
   importBatchId: string;
   cities: string[];
@@ -25,6 +25,9 @@ type CampaignRecord = {
   deliveredCount: number;
   readCount: number;
   failedCount: number;
+  errorCode: string;
+  errorMessage: string;
+  operationalError: string;
   createdAt: string;
   startedAt: string | null;
 };
@@ -139,6 +142,8 @@ export function CampaignDetails({ campaignId }: { campaignId: string }) {
         </div>
       </header>
       {notice && <div role="status" className="flex justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-xs"><span>{notice}</span><button aria-label="Dismiss" onClick={() => setNotice("")}><X size={14} /></button></div>}
+      {campaign.errorMessage && <div role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/5 px-4 py-3 text-xs text-rose-700 dark:text-rose-300"><strong>{campaign.errorCode || "Campaign error"}:</strong> {campaign.errorMessage}</div>}
+      {campaign.operationalError && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-800 dark:text-amber-300">{campaign.operationalError}</div>}
 
       <section className="surface soft-shadow rounded-2xl p-4 sm:p-5">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">{metrics.map(([label, value])=><div key={label} className="rounded-xl bg-[var(--surface-muted)] p-3"><p className="text-[10px] text-[var(--muted)]">{label}</p><p className="mt-1 text-xl font-semibold">{value.toLocaleString()}</p></div>)}</div>
