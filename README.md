@@ -5,9 +5,9 @@ A lightweight Next.js foundation for an ArclivoLabs WhatsApp CRM dashboard.
 ## Getting started
 
 1. Install dependencies with `npm install`.
-2. Copy `.env.example` to `.env.local` and configure `MONGODB_URI`, `REDIS_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and a random `AUTH_SECRET` (at least 32 characters).
+2. Copy `.env.example` to `.env.local` and configure `MONGODB_URI`, `REDIS_URL`, `META_CREDENTIALS_ENCRYPTION_KEY`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and a random `AUTH_SECRET` (at least 32 characters). For the worker, also configure the six `META_*` fallback credentials or save a verified WhatsApp connection in MongoDB.
 3. Run `npm run dev`, then sign in at `/login` to manage categories and create campaigns.
-4. Run `npm run worker` in a separate terminal. Campaign sending and recovery require this persistent worker and a reachable Redis instance.
+4. For local campaign testing, run `npm run worker` in a separate terminal. Production uses the Vercel Daemon configured in `vercel.json`.
 
 Category, contact, template, campaign, and WhatsApp admin APIs require the server-side admin session; admin credentials, Meta credentials, and session/encryption secrets must never be exposed using `NEXT_PUBLIC_` variables.
 
@@ -41,7 +41,7 @@ Configure Meta's webhook callback as `https://<your-public-host>/api/webhooks/wh
 
 ## Bulk messaging operations
 
-The campaign queue uses BullMQ backed by Redis. Keep `npm run worker` running as a dedicated persistent process in every deployment that sends campaigns; do not rely on a short-lived serverless request to process a campaign. The worker and web application must use the same MongoDB and `REDIS_URL`. The queue applies bounded retries and pacing, and ambiguous network/timeout outcomes are marked uncertain rather than blindly resent. Delivery, read, and failure counts are updated from Meta webhook statuses, not inferred from an API acceptance response.
+The campaign queue uses BullMQ backed by Redis. Production campaign sending and recovery use the Vercel Daemon configured in `vercel.json`; local development can run `npm run worker` in a separate terminal. The worker and web application must use the same MongoDB and `REDIS_URL`. The queue applies bounded retries and pacing, and ambiguous network/timeout outcomes are marked uncertain rather than blindly resent. Delivery, read, and failure counts are updated from Meta webhook statuses, not inferred from an API acceptance response.
 
 `REDIS_URL` must be the connection URL itself (`rediss://...` for Upstash), not the `redis-cli --tls -u ...` command shown beside it in the Upstash console. The application recognizes that common paste error, validates the extracted URL, and forces TLS for Upstash hosts. Configure the Redis database with a `noeviction` max-memory policy as required by BullMQ.
 
@@ -69,13 +69,27 @@ Never expose database credentials or future Meta API tokens through `NEXT_PUBLIC
 
 ## Production deployment and recovery
 
-The production hostname is intended to be `https://crm.arclivolabs.com`; DNS and hosting are not configured by this repository. Set `APP_BASE_URL` to that canonical HTTPS origin for operations and configure the Meta webhook URL as `${APP_BASE_URL}/api/webhooks/whatsapp`. Add `crm` as a custom domain with the chosen web host, create the DNS record that host specifies, wait for DNS propagation, and enable its managed TLS certificate before accepting Meta webhooks. Do not publish the webhook over HTTP.
+Set `APP_BASE_URL` to the deployed canonical HTTPS origin and configure the Meta webhook URL as `${APP_BASE_URL}/api/webhooks/whatsapp`. The production health check below uses `https://whatsapp.arclivolabs.com`; keep the Meta webhook on the same deployed origin. Do not publish the webhook over HTTP.
 
-Deploy the Next.js application to a Node-compatible host (Vercel is suitable for the web app) with the server-only values from `.env.example`. Provision MongoDB with TLS, a dedicated least-privilege application user, network allowlisting, and automated backups. Use a managed Redis deployment with authentication/TLS where supported. Run `npm ci`, `npm run typecheck`, `npm run lint`, and `npm run build` in CI before deployment.
+The Next.js application and campaign worker run on Vercel. Provision MongoDB with TLS, a dedicated least-privilege application user, network allowlisting, and automated backups. Use a managed Redis deployment with authentication/TLS and the BullMQ-compatible `noeviction` policy. Run `npm ci`, `npm run typecheck`, `npm run lint`, and `npm run build` in CI before deployment.
 
-Run `npm run worker` as a separate persistent Node process on infrastructure that supports long-running services. Give the worker the same `MONGODB_URI`, `REDIS_URL`, Meta credential configuration, and encryption key as the web app. Configure a restart policy and monitor process exit, Redis connectivity, and failed BullMQ jobs. The worker currently uses concurrency 1 and a one-message-per-second limiter and periodically reconciles queued work; do not scale additional workers without reviewing account-level Meta throughput and the shared limiter behavior.
+The project keeps its existing Next.js configuration and adds a Vercel Daemon named `campaign-worker`. Vercel builds `Dockerfile.worker` from the repository root and starts one 1 GiB instance in Mumbai (`bom1`) for Production deployments only. Vercel restarts failed instances, checks the worker's private `/health` liveness endpoint, and sends `SIGTERM` for graceful shutdown. The worker verifies Redis, MongoDB, effective Meta credentials, and BullMQ readiness before writing the heartbeat consumed by `/api/health`.
 
-Vercel should host only the Next.js web application. Deploy the included `Dockerfile.worker` as a separate always-on worker service (for example on Render, Railway, Fly.io, or another container host), with no public port. Its required secrets are `MONGODB_URI`, `REDIS_URL`, and `META_CREDENTIALS_ENCRYPTION_KEY`; also provide the `META_*` values if the worker must fall back to environment credentials. Use an automatic restart policy and deploy the worker before enabling campaign starts. `/api/health` reports only boolean database, Redis, and worker readiness and never returns credentials or connection URLs.
+In the Vercel project, set these as **Production** environment variables before deploying:
+
+- Required by the worker: `MONGODB_URI`, `REDIS_URL`, and `META_CREDENTIALS_ENCRYPTION_KEY`.
+- Required by the web app: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `AUTH_SECRET`.
+- If Meta credentials are not already stored encrypted in MongoDB, also set `META_WHATSAPP_BUSINESS_ACCOUNT_ID`, `META_WHATSAPP_PHONE_NUMBER_ID`, `META_GRAPH_API_VERSION`, `META_WHATSAPP_ACCESS_TOKEN`, `META_APP_SECRET`, and `META_WEBHOOK_VERIFY_TOKEN`.
+
+Vercel passes the Production deployment's environment variables to each daemon instance; daemon variables are not separately declared in `vercel.json`. The worker never logs credential values. The encryption key must match the key used to encrypt any Meta credentials stored in MongoDB.
+
+To activate the daemon, commit and push this configuration to the Vercel project's Production branch, or promote a deployment containing it to Production. Daemons do not run in Preview deployments. In Vercel, verify that the Production build includes the `campaign-worker` daemon and inspect its logs for Redis, MongoDB, Meta configuration, and BullMQ readiness. Then check `https://whatsapp.arclivolabs.com/api/health`; the expected result is `{"status":"ok","database":true,"redis":true,"worker":true}`. The endpoint reports only booleans and never returns credentials or connection URLs.
+
+**Campaign safety:** a Production deployment starts the worker, which can immediately consume existing BullMQ jobs and recover queued recipients for active campaigns. Do not deploy while any campaign work must remain unsent. The worker does not revive failed campaigns; it preserves the application's existing legacy-campaign quarantine and recipient safety checks.
+
+**Vercel Hobby limits:** Daemons are in public beta and available on Hobby, but Hobby has per-team monthly quotas of 5 Active CPU-hours and 420 GB-hours of Provisioned Memory across projects. A single 1 GiB instance running continuously uses about 720 GB-hours in a 30-day month, reaching the memory quota after roughly 17.5 days; actual CPU work also counts toward the 5 CPU-hour quota. When either quota is exhausted, Vercel stops the team's daemons until the next UTC month or a plan upgrade. Hobby is not sufficient for uninterrupted month-long operation. Pro/Enterprise daemon usage is billed for Active CPU and Provisioned Memory; check the current regional prices and set an appropriate budget before enabling continuous operation.
+
+The worker uses concurrency 1 and a one-message-per-second limiter and periodically reconciles queued work; do not scale additional workers without reviewing account-level Meta throughput and the shared limiter behavior.
 
 In Meta Business settings, authorize the system user for the WhatsApp Business Account and phone number with the required `whatsapp_business_management` and `whatsapp_business_messaging` permissions. Set a supported Graph API version and verify the WABA and phone number from **Settings → WhatsApp Integration**; a successful connection test requires real Meta credentials and cannot be simulated by this application. Subscribe the WABA to message and message-status webhook events at `https://crm.arclivolabs.com/api/webhooks/whatsapp`. Test using an authorized WhatsApp test contact before any production campaign.
 

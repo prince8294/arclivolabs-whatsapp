@@ -1,0 +1,28 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "daemons": {
+    "campaign-worker": {
+      "root": ".",
+      "entrypoint": "Dockerfile.worker",
+      "instances": {
+        "bom1": 1
+      },
+      "resources": {
+        "requests": {
+          "memory": "1Gi"
+        }
+      },
+      "terminationGracePeriodSeconds": 60,
+      "livenessProbe": {
+        "httpGet": {
+          "port": 1234,
+          "path": "/health"
+        },
+        "initialDelaySeconds": 30,
+        "periodSeconds": 30,
+        "timeoutSeconds": 5,
+        "failureThreshold": 3
+      }
+    }
+  }
+}

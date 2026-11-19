@@ -3,7 +3,7 @@ import IORedis from "ioredis";
 
 export const CAMPAIGN_QUEUE_NAME = "arclivo-whatsapp-campaigns";
 export const WORKER_HEARTBEAT_KEY = `${CAMPAIGN_QUEUE_NAME}:worker-heartbeat`;
-const WORKER_HEARTBEAT_TTL_SECONDS = 45;
+export const WORKER_HEARTBEAT_TTL_SECONDS = 45;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -77,6 +77,29 @@ export function getCampaignQueue() {
     );
   }
   return global.campaignQueueInstance;
+}
+
+export async function closeCampaignQueue() {
+  const queue = global.campaignQueueInstance;
+  const connection = global.campaignRedisInstance;
+  global.campaignQueueInstance = undefined;
+  global.campaignRedisInstance = undefined;
+
+  let closeError: unknown;
+  try {
+    if (queue) await queue.close();
+  } catch (error) {
+    closeError = error;
+  }
+
+  try {
+    if (connection && connection.status !== "end") await connection.quit();
+  } catch (error) {
+    connection?.disconnect();
+    closeError ??= error;
+  }
+
+  if (closeError) throw closeError;
 }
 
 export function sendJobId(recipientId: string, version: number) {
