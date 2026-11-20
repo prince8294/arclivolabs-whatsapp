@@ -174,6 +174,23 @@ export function ContactsPage() {
     await loadContacts();
   }
 
+  async function toggleDoNotContact(contact: ContactRecord) {
+    try {
+      const response = await fetch(`/api/contacts/${contact._id}/consent`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doNotContact: !contact.doNotContact })
+      });
+      if (!response.ok) throw new Error(await getApiError(response));
+      const result = await response.json() as { contact: ContactRecord };
+      setDetails(result.contact);
+      setNotice({ type: "success", message: result.contact.doNotContact ? "Do Not Contact flag enabled." : "Do Not Contact flag removed." });
+      await loadContacts();
+    } catch (error) {
+      setNotice({ type: "error", message: error instanceof Error ? error.message : "Do Not Contact status could not be updated." });
+    }
+  }
+
   async function confirmDelete() {
     if (!deleteTarget) return;
     setDeleting(true);
@@ -393,6 +410,7 @@ export function ContactsPage() {
           onEdit={() => startEdit(details)}
           onDelete={() => setDeleteTarget({ type: "single", contact: details })}
           onConsent={() => setConsentContact(details)}
+          onDoNotContact={() => void toggleDoNotContact(details)}
         />
       )}
       {formOpen && <ContactFormDialog categories={categories} contact={editing} onClose={() => { setFormOpen(false); setEditing(null); }} onSaved={(contact) => void savedContact(contact)} />}

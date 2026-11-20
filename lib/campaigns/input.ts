@@ -23,8 +23,8 @@ export function parseCampaignInput(value: unknown, allowIncomplete = false):
   if (description.length > 1000) return { ok: false, message: "Campaign description must be 1,000 characters or fewer." };
 
   const rawIds = input.categoryIds ?? [];
-  if (!Array.isArray(rawIds) || rawIds.length > 100 || rawIds.some((id) => typeof id !== "string" || !Types.ObjectId.isValid(id))) {
-    return { ok: false, message: "Select valid business categories." };
+  if (!Array.isArray(rawIds) || rawIds.length > 1 || rawIds.some((id) => typeof id !== "string" || !Types.ObjectId.isValid(id))) {
+    return { ok: false, message: "Select exactly one business category per campaign." };
   }
   const categoryIds = [...new Set(rawIds as string[])];
   if (!allowIncomplete && !categoryIds.length) return { ok: false, message: "Select at least one business category." };

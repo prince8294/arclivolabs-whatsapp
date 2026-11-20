@@ -3,10 +3,9 @@ import { isAdminSessionValid } from "@/lib/auth/admin-session";
 import { connectToDatabase } from "@/lib/db/mongodb";
 import MessageTemplate from "@/lib/models/message-template";
 import Category from "@/lib/models/category";
-import { extractTemplateVariables } from "@/lib/templates/validation";
 import { getStoredConnection, getEffectiveCredentials, markConnectionError } from "@/lib/whatsapp/config";
 import { MetaApiError } from "@/lib/whatsapp/meta";
-import { listMetaTemplates, supportedTemplateComponents } from "@/lib/campaigns/meta-templates";
+import { extractComponentTemplateVariables, listMetaTemplates, supportedTemplateComponents } from "@/lib/campaigns/meta-templates";
 
 export async function GET(request: NextRequest) {
   if (!isAdminSessionValid(request)) {
@@ -45,12 +44,7 @@ export async function GET(request: NextRequest) {
         );
         continue;
       }
-      if ([
-        components.header,
-        components.footer,
-        ...components.buttons.map((button) => button.url ?? "")
-      ].some((value) => /\{\{\s*\d+\s*\}\}/.test(value))) continue;
-      const variables = extractTemplateVariables(components.body);
+      const variables = extractComponentTemplateVariables(components);
       if (variables.some((number, index) => number !== index + 1)) continue;
       choices.push({
         _id: local._id.toString(),

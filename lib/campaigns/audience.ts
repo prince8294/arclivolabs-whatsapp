@@ -4,6 +4,7 @@ import Contact from "@/lib/models/contact";
 import Category from "@/lib/models/category";
 import MessageSuppression from "@/lib/models/message-suppression";
 import { extractTemplateVariables } from "@/lib/templates/validation";
+import { findRecordedRecipients } from "@/lib/campaigns/reservations";
 
 export type CampaignVariableMapping = {
   number: number;
@@ -15,6 +16,8 @@ export type AudienceOptions = {
   cities: string[];
   variableMappings: CampaignVariableMapping[];
   body: string;
+  variableNumbers?: number[];
+  campaignId?: string;
 };
 
 export type EligibleRecipient = {
@@ -52,11 +55,11 @@ export async function* scanAudience(options: AudienceOptions, batchSize = 400): 
   if (options.cities.length) filter.city = { $in: options.cities };
   const categories = await Category.find({ _id: { $in: options.categoryIds } }).select("name").lean();
   const categoryNames = new Map(categories.map((category) => [String(category._id), category.name]));
-  const variables = extractTemplateVariables(options.body);
+  const variables = options.variableNumbers ?? extractTemplateVariables(options.body);
   const mappings = new Map(options.variableMappings.map((item) => [item.number, item.mapping]));
   const seenPhoneNumbers = new Set<string>();
   const cursor = Contact.find(filter)
-    .select("businessName contactPerson phoneNumber categoryId city marketingConsentStatus consentSource consentTimestamp")
+    .select("businessName contactPerson phoneNumber categoryId city marketingConsentStatus consentSource consentTimestamp doNotContact")
     .sort({ _id: 1 })
     .lean()
     .cursor();
@@ -64,10 +67,14 @@ export async function* scanAudience(options: AudienceOptions, batchSize = 400): 
 
   async function evaluate(rows: Awaited<ReturnType<typeof cursor.next>>[]): Promise<AudienceBatch> {
     const normalizedNumbers = rows.map((contact) => contact ? normalizePhoneNumber(contact.phoneNumber) : null).filter((phone): phone is string => Boolean(phone));
-    const suppressed = new Set(
-      (await MessageSuppression.find({ phoneNumber: { $in: normalizedNumbers } }).select("phoneNumber").lean())
-        .map((item) => item.phoneNumber)
-    );
+    const [suppressionRecords, recorded] = await Promise.all([
+      MessageSuppression.find({ phoneNumber: { $in: normalizedNumbers } }).select("phoneNumber").lean(),
+      findRecordedRecipients(
+        normalizedNumbers,
+        options.campaignId && Types.ObjectId.isValid(options.campaignId) ? new Types.ObjectId(options.campaignId) : undefined
+      )
+    ]);
+    const suppressed = new Set(suppressionRecords.map((item) => item.phoneNumber));
     for (const contact of rows) {
       if (contact?.marketingConsentStatus === "Opted Out") {
         const optedOutPhone = normalizePhoneNumber(contact.phoneNumber);
@@ -107,6 +114,12 @@ export async function* scanAudience(options: AudienceOptions, batchSize = 400): 
       } else if (suppressed.has(phoneNumber)) {
         errorCode = "SUPPRESSED";
         errorMessage = "Contact number is on the suppression list.";
+      } else if (contact.doNotContact) {
+        errorCode = "SUPPRESSED";
+        errorMessage = "Contact is marked Do Not Contact.";
+      } else if (recorded.has(phoneNumber)) {
+        errorCode = "DUPLICATE_PHONE";
+        errorMessage = `Recipient already recorded in campaign ${recorded.get(phoneNumber)?.campaignId ?? "history"}.`;
       } else if (seenPhoneNumbers.has(phoneNumber)) {
         errorCode = "DUPLICATE_PHONE";
         errorMessage = "Duplicate WhatsApp number excluded from this campaign.";

@@ -3,17 +3,12 @@ import { Types } from "mongoose";
 import { NextRequest, NextResponse } from "next/server";
 import { isAdminSessionValid, isSameOriginRequest } from "@/lib/auth/admin-session";
 import { connectToDatabase } from "@/lib/db/mongodb";
-import { inspectPersonalizedRows, parsePersonalizedRows, personalizedModes } from "@/lib/campaigns/personalized";
+import { inspectPersonalizedRows, parsePersonalizedRows } from "@/lib/campaigns/personalized";
+import { reserveCampaignRecipients } from "@/lib/campaigns/reservations";
 import { refreshCampaignCounts } from "@/lib/campaigns/counts";
 import Campaign from "@/lib/models/campaign";
 import CampaignRecipient from "@/lib/models/campaign-recipient";
-import Contact from "@/lib/models/contact";
-import MessageSuppression from "@/lib/models/message-suppression";
-
-function validDocumentedDate(value: string) {
-  const date = new Date(value);
-  return !Number.isNaN(date.getTime()) && date.getTime() <= Date.now() ? date : null;
-}
+import CampaignRecipientReservation from "@/lib/models/campaign-recipient-reservation";
 
 export async function POST(request: NextRequest) {
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: { code: "FORBIDDEN", message: "Request origin is not allowed." } }, { status: 403 });
@@ -22,133 +17,143 @@ export async function POST(request: NextRequest) {
   try { body = await request.json(); } catch { return NextResponse.json({ error: { code: "INVALID_JSON", message: "Request body must be valid JSON." } }, { status: 400 }); }
   if (!body || typeof body !== "object" || Array.isArray(body)) return NextResponse.json({ error: { code: "INVALID_IMPORT", message: "Import request must be an object." } }, { status: 400 });
   const input = body as Record<string, unknown>;
-  const name = typeof input.name === "string" ? input.name.trim() : "";
-  const description = typeof input.description === "string" ? input.description.trim() : "";
-  if (!name || name.length > 120 || description.length > 1000) return NextResponse.json({ error: { code: "INVALID_CAMPAIGN", message: "A campaign name of up to 120 characters is required." } }, { status: 400 });
-  if (!personalizedModes.includes(input.mode as (typeof personalizedModes)[number])) return NextResponse.json({ error: { code: "SENDING_MODE_REQUIRED", message: "Explicitly choose a sending mode." } }, { status: 400 });
+  if (input.mode !== "approved_template") {
+    return NextResponse.json({ error: { code: "APPROVED_TEMPLATE_REQUIRED", message: "Bulk marketing requires a currently approved Meta template." } }, { status: 400 });
+  }
   if (input.confirm !== true) return NextResponse.json({ error: { code: "CONFIRMATION_REQUIRED", message: "Confirm the reviewed import before saving it." } }, { status: 400 });
+  if (typeof input.categoryId !== "string" || !Types.ObjectId.isValid(input.categoryId)) {
+    return NextResponse.json({ error: { code: "CATEGORY_REQUIRED", message: "Select exactly one campaign category." } }, { status: 400 });
+  }
   const parsed = parsePersonalizedRows(input.rows);
   if (!parsed.ok) return NextResponse.json({ error: { code: "INVALID_IMPORT", message: parsed.message } }, { status: 400 });
-  const selectedRows = Array.isArray(input.selectedRows) ? new Set(input.selectedRows.filter((item): item is number => Number.isInteger(item))) : null;
-  const manuallyExcludedRows = new Set(Array.isArray(input.excludedRows) ? input.excludedRows.filter((item): item is number => Number.isInteger(item)) : []);
+
   try {
     await connectToDatabase();
-    const mode = input.mode as (typeof personalizedModes)[number];
-    const inspected = await inspectPersonalizedRows(parsed.rows, mode, typeof input.templateId === "string" ? input.templateId : "");
-    const rows = selectedRows ? inspected.rows.filter((row) => selectedRows.has(row.row)) : inspected.rows;
-    for (const row of rows) {
-      if (manuallyExcludedRows.has(row.row)) {
-        row.eligible = false;
-        row.eligibilityStatus = "Excluded";
-        row.exclusionReason = "Manually excluded during campaign preview.";
-      }
+    const inspected = await inspectPersonalizedRows(
+      parsed.rows,
+      "approved_template",
+      typeof input.templateId === "string" ? input.templateId : "",
+      input.categoryId
+    );
+    if (!inspected.template) {
+      return NextResponse.json({ error: { code: "TEMPLATE_NOT_APPROVED", message: "Choose a currently approved Meta marketing template." } }, { status: 400 });
     }
-    if (!rows.length) return NextResponse.json({ error: { code: "EMPTY_SELECTION", message: "Select at least one previewed recipient." } }, { status: 400 });
-    if (!rows.some((row) => row.eligible)) return NextResponse.json({ error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "The selected rows contain no recipients currently eligible to send." } }, { status: 400 });
-    if (mode === "approved_template" && !inspected.template) return NextResponse.json({ error: { code: "TEMPLATE_NOT_APPROVED", message: "Choose a currently approved Meta template." } }, { status: 400 });
+    if (!inspected.rows.some((row) => row.eligible)) {
+      return NextResponse.json({ error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "No rows currently meet the category, consent, template, and duplicate checks." } }, { status: 400 });
+    }
 
+    const categoryId = new Types.ObjectId(input.categoryId);
     const importBatchId = randomUUID();
-    const categoryIds = [...new Set(rows.flatMap((row) => row.categoryId ? [String(row.categoryId)] : []))];
+    const generatedName = `${inspected.rows[0]?.categoryName || "Bulk"} campaign ${new Date().toISOString().slice(0, 10)}`;
+    const name = typeof input.name === "string" && input.name.trim()
+      ? input.name.trim().slice(0, 120)
+      : generatedName.slice(0, 120);
+    const description = typeof input.description === "string" ? input.description.trim().slice(0, 1000) : "";
     const campaign = await Campaign.create({
       name,
       description,
       importBatchId,
-      messageMode: mode,
-      categoryIds: categoryIds.map((id) => new Types.ObjectId(id)),
-      cities: [...new Set(rows.map((row) => row.city).filter(Boolean))],
-      templateId: inspected.template?._id ?? null,
+      messageMode: "approved_template",
+      categoryIds: [categoryId],
+      cities: [...new Set(inspected.rows.map((row) => row.city).filter(Boolean))],
+      templateId: inspected.template._id,
+      templateName: inspected.template.name,
+      templateLanguage: inspected.template.language,
+      templateCategory: "MARKETING",
+      templateBody: inspected.template.body,
+      templateHeader: inspected.template.header,
+      templateFooter: inspected.template.footer,
+      templateButtons: inspected.template.buttons,
       status: "Draft",
-      dispatchStatus: "pending"
+      dispatchStatus: "completed"
     });
 
+    const recipientIds = new Map<number, Types.ObjectId>();
+    for (const row of inspected.rows) recipientIds.set(row.row, new Types.ObjectId());
+    const candidates = inspected.rows.filter((row) => row.eligible).map((row) => ({
+      phoneNumber: row.normalizedPhoneNumber,
+      campaignId: campaign._id,
+      campaignRecipientId: recipientIds.get(row.row)!
+    }));
     try {
-      for (const row of rows) {
-        if (!row.normalizedPhoneNumber || !row.categoryId) continue;
-        const consentDate = validDocumentedDate(row.consentDate);
-        const documented = row.consentStatus !== "Unknown" && Boolean(row.consentSource && consentDate);
-        await Contact.updateOne(
-          { phoneNumber: row.normalizedPhoneNumber },
-          {
-            $setOnInsert: {
-              businessName: row.businessName,
-              phoneNumber: row.normalizedPhoneNumber,
-              categoryId: row.categoryId,
-              city: row.city,
-              marketingConsentStatus: documented ? row.consentStatus : "Unknown",
-              consentSource: documented ? row.consentSource : "",
-              consentTimestamp: documented ? consentDate : null,
-              consentHistory: documented ? [{ status: row.consentStatus, source: row.consentSource, timestamp: consentDate }] : []
-            }
-          },
-          { upsert: true }
-        );
-        if (documented) {
-          await Contact.updateOne(
-            {
-              phoneNumber: row.normalizedPhoneNumber,
-              ...(row.consentStatus === "Opted In" ? { marketingConsentStatus: { $ne: "Opted Out" } } : {})
-            },
-            {
-              $set: {
-                marketingConsentStatus: row.consentStatus,
-                consentSource: row.consentSource,
-                consentTimestamp: consentDate
-              },
-              $addToSet: {
-                consentHistory: { status: row.consentStatus, source: row.consentSource, timestamp: consentDate }
-              }
-            }
-          );
+      const reserved = await reserveCampaignRecipients(candidates);
+      for (const row of inspected.rows) {
+        const recipientId = recipientIds.get(row.row);
+        if (row.eligible && recipientId && !reserved.has(String(recipientId))) {
+          row.eligible = false;
+          row.eligibilityStatus = "Duplicate Contact";
+          row.duplicateType = "already_reserved";
+          row.exclusionReason = "Another campaign reserved this number first.";
         }
       }
-      const contacts = await Contact.find({ phoneNumber: { $in: rows.map((row) => row.normalizedPhoneNumber).filter(Boolean) } }).select("_id phoneNumber marketingConsentStatus").lean();
-      const contactsByPhone = new Map(contacts.map((contact) => [contact.phoneNumber, contact]));
-      const optedOut = contacts.filter((contact) => contact.marketingConsentStatus === "Opted Out");
-      if (optedOut.length) {
-        await MessageSuppression.bulkWrite(optedOut.map((contact) => ({ updateOne: {
-          filter: { phoneNumber: contact.phoneNumber },
-          update: { $setOnInsert: { phoneNumber: contact.phoneNumber, contactId: contact._id, reason: "Opted Out", source: "Personalized CSV import", suppressedAt: new Date() } },
-          upsert: true
-        } })), { ordered: false });
+
+      const claimed = inspected.rows.filter((row) => row.eligible);
+      if (!claimed.length) {
+        await Campaign.deleteOne({ _id: campaign._id, status: "Draft" });
+        return NextResponse.json({ error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "Every recipient was reserved by another campaign before this import could be saved." } }, { status: 409 });
       }
-      const recipientRows = rows.filter((row) =>
-        row.normalizedPhoneNumber && row.categoryId && row.eligibilityStatus !== "Duplicate Contact"
-      );
-      await CampaignRecipient.insertMany(recipientRows.map((row) => {
-        const contact = contactsByPhone.get(row.normalizedPhoneNumber);
-        return {
+
+      const usedContacts = new Set<string>();
+      const preferredRows = [...inspected.rows].sort((a, b) => Number(b.eligible) - Number(a.eligible));
+      const recipientDocuments = preferredRows.flatMap((row) => {
+        if (!row.contactId || !row.normalizedPhoneNumber || row.duplicateType === "within_csv") return [];
+        const contactId = String(row.contactId);
+        if (usedContacts.has(contactId)) return [];
+        usedContacts.add(contactId);
+        const recipientId = recipientIds.get(row.row);
+        if (!recipientId) return [];
+        return [{
+          _id: recipientId,
           campaignId: campaign._id,
-          contactId: contact?._id ?? null,
+          contactId: row.contactId,
           importBatchId,
           importRowNumber: row.row,
-          phoneNumber: row.normalizedPhoneNumber || row.phoneNumber,
+          phoneNumber: row.normalizedPhoneNumber,
           businessName: row.businessName,
-          categoryId: row.categoryId,
+          categoryId,
           categoryName: row.categoryName,
           city: row.city,
-          messageMode: mode,
-          originalCsvMessage: row.message,
-          templateId: inspected.template?._id ?? null,
+          messageMode: "approved_template" as const,
+          templateId: inspected.template!._id,
+          templateName: inspected.template!.name,
+          templateLanguage: inspected.template!.language,
+          templateCategory: "MARKETING",
           templateVariables: row.templateVariables,
           renderedMessage: row.renderedMessage,
           eligibilityStatus: row.eligibilityStatus,
           exclusionReason: row.exclusionReason,
-          queueStatus: row.eligible ? "queued" : "excluded",
+          duplicateType: row.duplicateType,
+          duplicateCampaignId: Types.ObjectId.isValid(row.duplicateCampaignId) ? new Types.ObjectId(row.duplicateCampaignId) : null,
+          duplicateRecordId: row.duplicateRecordId,
+          queueStatus: row.eligible ? "queued" as const : "excluded" as const,
           errorCode: row.eligible ? "" : row.eligibilityStatus.toUpperCase().replace(/\s+/g, "_"),
           errorMessage: row.exclusionReason,
           updatedStatusAt: new Date()
-        };
-      }), { ordered: true });
+        }];
+      });
+      if (recipientDocuments.length) await CampaignRecipient.insertMany(recipientDocuments, { ordered: true });
+      await refreshCampaignCounts(String(campaign._id));
+      return NextResponse.json({
+        campaignId: String(campaign._id),
+        importBatchId,
+        eligible: claimed.length,
+        excluded: inspected.summary.excludedContacts + (inspected.summary.eligibleContacts - claimed.length),
+        summary: {
+          ...inspected.summary,
+          eligibleContacts: claimed.length,
+          excludedContacts: inspected.summary.excludedContacts + (inspected.summary.eligibleContacts - claimed.length),
+          previouslyImportedOrContacted: inspected.summary.previouslyImportedOrContacted +
+            inspected.rows.filter((row) => row.duplicateType === "already_reserved").length
+        }
+      }, { status: 201 });
     } catch (error) {
       await CampaignRecipient.deleteMany({ campaignId: campaign._id });
-      await Campaign.deleteOne({ _id: campaign._id });
+      await CampaignRecipientReservation.deleteMany({ campaignId: campaign._id });
+      await Campaign.deleteOne({ _id: campaign._id, status: "Draft" });
       throw error;
     }
-    await Campaign.updateOne({ _id: campaign._id }, { $set: { dispatchStatus: "completed" } });
-    await refreshCampaignCounts(String(campaign._id));
-    return NextResponse.json({ campaignId: String(campaign._id), importBatchId, eligible: rows.filter((row) => row.eligible).length, excluded: rows.filter((row) => !row.eligible).length }, { status: 201 });
   } catch (error) {
-    console.error("Personalized campaign import failed.", error);
-    return NextResponse.json({ error: { code: "PERSONALIZED_IMPORT_FAILED", message: "The reviewed personalized campaign could not be saved." } }, { status: 500 });
+    console.error("Approved-template campaign import failed.", error);
+    return NextResponse.json({ error: { code: "PERSONALIZED_IMPORT_FAILED", message: "The reviewed campaign could not be saved." } }, { status: 500 });
   }
 }

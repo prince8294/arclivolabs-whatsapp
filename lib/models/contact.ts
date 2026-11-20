@@ -28,7 +28,8 @@ const contactSchema = new Schema(
     },
     consentSource: { type: String, default: "", trim: true, maxlength: 120 },
     consentTimestamp: { type: Date, default: null },
-    consentHistory: { type: [consentHistorySchema], default: [] }
+    consentHistory: { type: [consentHistorySchema], default: [] },
+    doNotContact: { type: Boolean, default: false, index: true }
   },
   { timestamps: true }
 );

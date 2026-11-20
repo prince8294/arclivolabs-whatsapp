@@ -16,6 +16,7 @@ export type ContactRecord = {
   consentSource?: string;
   consentTimestamp?: string | null;
   consentHistory?: { status: ContactConsentStatus; source: string; timestamp: string }[];
+  doNotContact?: boolean;
   createdAt: string;
   updatedAt?: string;
 };

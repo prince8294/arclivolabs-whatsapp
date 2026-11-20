@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizePhoneNumber } from "@/lib/contacts/validation";
 import { connectToDatabase } from "@/lib/db/mongodb";
 import Contact from "@/lib/models/contact";
+import MessageSuppression from "@/lib/models/message-suppression";
 import WhatsAppMessage from "@/lib/models/whatsapp-message";
 import Conversation from "@/lib/models/conversation";
 import MessageTemplate from "@/lib/models/message-template";
@@ -73,6 +74,10 @@ async function markEventProcessed(key: string) {
     { eventKey: key, processedAt: null },
     { $set: { processedAt: new Date() } }
   );
+}
+
+function isOptOutMessage(value: string) {
+  return ["stop", "unsubscribe", "cancel", "end", "quit"].includes(value.trim().toLowerCase());
 }
 
 async function readWebhookBody(request: NextRequest) {
@@ -163,6 +168,37 @@ async function storeIncomingMessage(message: JsonRecord, contacts: unknown) {
   const messageAt = timestamp(message.timestamp) ?? new Date();
   await updateConversationActivity(conversation._id, text || `${type} message`, messageAt, "incoming");
   await refreshUnreadCount(conversation._id);
+  if (phoneNumber && type === "text" && isOptOutMessage(text)) {
+    const source = `WhatsApp ${text.trim().toUpperCase()}`;
+    if (contact) {
+      await Contact.updateOne(
+        { _id: contact._id },
+        {
+          $set: {
+            marketingConsentStatus: "Opted Out",
+            consentSource: source,
+            consentTimestamp: messageAt
+          },
+          $addToSet: {
+            consentHistory: { status: "Opted Out", source, timestamp: messageAt }
+          }
+        }
+      );
+    }
+    await MessageSuppression.updateOne(
+      { phoneNumber },
+      {
+        $set: {
+          contactId: contact?._id ?? null,
+          reason: "Opted Out",
+          source,
+          suppressedAt: messageAt
+        },
+        $setOnInsert: { phoneNumber }
+      },
+      { upsert: true }
+    );
+  }
   await markEventProcessed(event);
 }
 

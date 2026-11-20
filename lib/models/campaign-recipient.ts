@@ -26,10 +26,13 @@ const campaignRecipientSchema = new Schema(
     renderedMessage: { type: String, default: "", maxlength: 4096 },
     eligibilityStatus: {
       type: String,
-      enum: ["Ready to Send", "Template Required", "Missing Consent", "Invalid Number", "Missing Variable", "Opted Out", "Duplicate Contact", "Suppressed", "Excluded"],
+      enum: ["Ready to Send", "Template Required", "Missing Consent", "Invalid Number", "Missing Variable", "Opted Out", "Duplicate Contact", "Suppressed", "Wrong Category", "Excluded"],
       default: "Ready to Send",
       index: true
     },
+    duplicateType: { type: String, default: "", maxlength: 80 },
+    duplicateCampaignId: { type: Schema.Types.ObjectId, ref: "Campaign", default: null },
+    duplicateRecordId: { type: String, default: "", maxlength: 255 },
     exclusionReason: { type: String, default: "", maxlength: 1000 },
     whatsappMessageId: { type: String, default: "", index: true },
     queueStatus: {

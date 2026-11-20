@@ -255,7 +255,11 @@ export function TemplateEditor({ templateId }: TemplateEditorProps) {
       setNotice("Use one website button on its own, or up to three quick reply buttons.");
       return;
     }
-    update("buttons", [...template.buttons, { type, text: "", ...(type === "URL" ? { url: "" } : {}) }]);
+    update("buttons", [...template.buttons, {
+      type,
+      text: type === "URL" ? "Visit Website" : "",
+      ...(type === "URL" ? { url: "https://arclivolabs.com/" } : {})
+    }]);
   }
 
   const fieldClass = "mt-1.5 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-xs outline-none focus:border-[var(--accent)]";

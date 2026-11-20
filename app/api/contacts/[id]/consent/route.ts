@@ -34,6 +34,39 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
   }
 
   const values = body as Record<string, unknown>;
+  if (Object.keys(values).length === 1 && Object.prototype.hasOwnProperty.call(values, "doNotContact")) {
+    if (typeof values.doNotContact !== "boolean") {
+      return NextResponse.json({ error: { code: "INVALID_DNC", message: "Do Not Contact must be true or false." } }, { status: 400 });
+    }
+    try {
+      await connectToDatabase();
+      const contact = await Contact.findById(params.id);
+      if (!contact) return NextResponse.json({ error: { code: "NOT_FOUND", message: "Contact was not found." } }, { status: 404 });
+      contact.doNotContact = values.doNotContact;
+      await contact.save();
+      if (values.doNotContact) {
+        await MessageSuppression.updateOne(
+          { phoneNumber: contact.phoneNumber },
+          {
+            $setOnInsert: {
+              phoneNumber: contact.phoneNumber,
+              contactId: contact._id,
+              reason: "Do Not Contact",
+              source: "CRM Do Not Contact flag",
+              suppressedAt: new Date()
+            }
+          },
+          { upsert: true }
+        );
+      } else if (contact.marketingConsentStatus !== "Opted Out") {
+        await MessageSuppression.deleteOne({ phoneNumber: contact.phoneNumber, reason: "Do Not Contact" });
+      }
+      await contact.populate("categoryId", "name icon");
+      return NextResponse.json({ contact });
+    } catch (error) {
+      return contactServerError(error);
+    }
+  }
   const parsed = validateConsentInput(values);
   if (!parsed.ok) {
     return NextResponse.json({ error: { code: "INVALID_CONSENT", message: parsed.message } }, { status: 400 });

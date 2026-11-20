@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Types } from "mongoose";
 import { NextRequest, NextResponse } from "next/server";
 import { isAdminSessionValid, isSameOriginRequest } from "@/lib/auth/admin-session";
@@ -5,12 +6,12 @@ import { connectToDatabase } from "@/lib/db/mongodb";
 import Campaign from "@/lib/models/campaign";
 import CampaignRecipient from "@/lib/models/campaign-recipient";
 import MessageTemplate from "@/lib/models/message-template";
-import { extractTemplateVariables } from "@/lib/templates/validation";
 import { getStoredConnection, getEffectiveCredentials, markConnectionError } from "@/lib/whatsapp/config";
 import { MetaApiError } from "@/lib/whatsapp/meta";
 import { enqueueRecipients, verifyQueueInfrastructure } from "@/lib/campaigns/queue";
-import { listMetaTemplates, supportedTemplateComponents } from "@/lib/campaigns/meta-templates";
+import { extractComponentTemplateVariables, listMetaTemplates, supportedTemplateComponents } from "@/lib/campaigns/meta-templates";
 import { createCampaignRecipientSnapshot } from "@/lib/campaigns/snapshot";
+import { canStartCampaign } from "@/lib/campaigns/dispatch-policy";
 
 type RouteContext = { params: { id: string } };
 
@@ -37,17 +38,20 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     return NextResponse.json({ error: { code: "REDIS_NOT_CONFIGURED", message: "Configure REDIS_URL and the persistent campaign worker before starting a campaign." } }, { status: 503 });
   }
 
+  let startClaimToken = "";
   try {
     await connectToDatabase();
     const campaign = await Campaign.findById(params.id);
     if (!campaign) return NextResponse.json({ error: { code: "NOT_FOUND", message: "Campaign was not found." } }, { status: 404 });
-    if (campaign.status !== "Draft") {
+    if (!canStartCampaign(campaign.status)) {
       return NextResponse.json({ error: { code: "CAMPAIGN_ALREADY_STARTED", message: "This campaign is no longer a draft and cannot be started again." } }, { status: 409 });
     }
     const isPersonalizedImport = Boolean(campaign.importBatchId);
-    const isFreeFormCsv = isPersonalizedImport && campaign.messageMode === "personalized_csv";
-    if (!isPersonalizedImport && (!campaign.categoryIds.length || !campaign.templateId)) {
-      return NextResponse.json({ error: { code: "CAMPAIGN_INCOMPLETE", message: "Select at least one category and an approved template before starting." } }, { status: 400 });
+    if (campaign.messageMode === "personalized_csv") {
+      return NextResponse.json({ error: { code: "APPROVED_TEMPLATE_REQUIRED", message: "Free-form CSV campaigns are disabled. Create a new campaign with an approved Meta template." } }, { status: 409 });
+    }
+    if (!campaign.categoryIds.length || campaign.categoryIds.length !== 1 || !campaign.templateId) {
+      return NextResponse.json({ error: { code: "CAMPAIGN_INCOMPLETE", message: "Select exactly one category and an approved template before starting." } }, { status: 400 });
     }
     const connection = await getStoredConnection();
     if (!connection || connection.status !== "connected") {
@@ -58,7 +62,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       if (!eligible) return NextResponse.json({ error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "No reviewed recipients are eligible to enter the queue." } }, { status: 400 });
     }
     let snapshotCounts: { total: number; eligible: number; excluded: number } | null = null;
-    if (!isFreeFormCsv) {
+    {
       const template = await MessageTemplate.findById(campaign.templateId);
       if (!template || template.isDraft || !template.metaTemplateId) {
         return NextResponse.json({ error: { code: "TEMPLATE_NOT_APPROVED", message: "Selected template has not been submitted to Meta." } }, { status: 400 });
@@ -88,15 +92,10 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         }, { status: 400 });
       }
       const components = supportedTemplateComponents(remote.components);
-      const unsupportedComponentVariables = components && [
-        components.header,
-        components.footer,
-        ...components.buttons.map((button) => button.url ?? "")
-      ].some((text) => /\{\{\s*\d+\s*\}\}/.test(text));
-      if (!components || unsupportedComponentVariables) {
+      if (!components) {
         return NextResponse.json({ error: { code: "TEMPLATE_NOT_ELIGIBLE", message: "Selected Meta template uses unsupported message components and cannot be sent by this campaign tool." } }, { status: 400 });
       }
-      const variables = extractTemplateVariables(components.body);
+      const variables = extractComponentTemplateVariables(components);
       if (variables.some((number, index) => number !== index + 1)) {
         return NextResponse.json({ error: { code: "TEMPLATE_VARIABLES_INVALID", message: "Meta template variables must be numbered consecutively from {{1}}." } }, { status: 400 });
       }
@@ -117,6 +116,9 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       campaign.templateLanguage = template.language;
       campaign.templateCategory = template.metaCategory;
       campaign.templateBody = template.body;
+      campaign.templateHeader = template.header;
+      campaign.templateFooter = template.footer;
+      campaign.templateButtons = components.buttons;
       await campaign.save();
 
       if (isPersonalizedImport) {
@@ -132,25 +134,42 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         );
       }
 
+      try {
+        await verifyQueueInfrastructure(true);
+      } catch (error) {
+        const workerUnavailable = error instanceof Error && error.message.includes("heartbeat");
+        console.error(workerUnavailable ? "Campaign worker is unavailable." : "Redis connectivity check failed.", {
+          error: error instanceof Error ? error.message : "Unknown queue error"
+        });
+        return NextResponse.json({
+          error: {
+            code: workerUnavailable ? "WORKER_UNAVAILABLE" : "REDIS_CONNECTION_FAILED",
+            message: workerUnavailable
+              ? "The persistent campaign worker is not running. Start or restore the worker before launching this campaign."
+              : "Redis could not be reached. Check REDIS_URL, TLS, and the Redis service before launching this campaign."
+          }
+        }, { status: 503 });
+      }
+
+      startClaimToken = randomUUID();
+      const startClaim = await Campaign.findOneAndUpdate(
+        { _id: campaign._id, status: "Draft", startClaimToken: "" },
+        { $set: { startClaimToken } },
+        { new: true }
+      ).select("_id").lean();
+      if (!startClaim) {
+        startClaimToken = "";
+        return NextResponse.json({ error: { code: "CAMPAIGN_ALREADY_STARTED", message: "Another request is already starting this campaign." } }, { status: 409 });
+      }
+
       if (!isPersonalizedImport) {
-        try {
-          await verifyQueueInfrastructure(true);
-        } catch (error) {
-          const workerUnavailable = error instanceof Error && error.message.includes("heartbeat");
-          console.error(workerUnavailable ? "Campaign worker is unavailable." : "Redis connectivity check failed.", {
-            error: error instanceof Error ? error.message : "Unknown queue error"
-          });
-          return NextResponse.json({
-            error: {
-              code: workerUnavailable ? "WORKER_UNAVAILABLE" : "REDIS_CONNECTION_FAILED",
-              message: workerUnavailable
-                ? "The persistent campaign worker is not running. Start or restore the worker before launching this campaign."
-                : "Redis could not be reached. Check REDIS_URL, TLS, and the Redis service before launching this campaign."
-            }
-          }, { status: 503 });
-        }
         snapshotCounts = await createCampaignRecipientSnapshot(campaign, template);
         if (!snapshotCounts.eligible) {
+          await Campaign.updateOne(
+            { _id: campaign._id, status: "Draft", startClaimToken },
+            { $set: { startClaimToken: "" } }
+          );
+          startClaimToken = "";
           return NextResponse.json({
             error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "No contacts have valid current consent and all required template values." }
           }, { status: 400 });
@@ -158,27 +177,12 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       }
     }
 
-    if (isPersonalizedImport) {
-      try {
-        await verifyQueueInfrastructure(true);
-      } catch (error) {
-        const workerUnavailable = error instanceof Error && error.message.includes("heartbeat");
-        return NextResponse.json({
-          error: {
-            code: workerUnavailable ? "WORKER_UNAVAILABLE" : "REDIS_CONNECTION_FAILED",
-            message: workerUnavailable
-              ? "The persistent campaign worker is not running. Start or restore it before launching this campaign."
-              : "Redis could not be reached. Check REDIS_URL and TLS before launching this campaign."
-          }
-        }, { status: 503 });
-      }
-    }
-
     const started = await Campaign.findOneAndUpdate(
-      { _id: campaign._id, status: "Draft" },
+      { _id: campaign._id, status: "Draft", startClaimToken },
       {
         $set: {
           status: "Queued",
+          startClaimToken: "",
           dispatchStatus: "completed",
           startedAt: new Date(),
           completedAt: null,
@@ -203,8 +207,14 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       { new: true }
     ).lean();
     if (!started) {
+      await Campaign.updateOne(
+        { _id: campaign._id, status: "Draft", startClaimToken },
+        { $set: { startClaimToken: "" } }
+      );
+      startClaimToken = "";
       return NextResponse.json({ error: { code: "CAMPAIGN_ALREADY_STARTED", message: "This campaign was already started." } }, { status: 409 });
     }
+    startClaimToken = "";
     try {
       const recipients = await CampaignRecipient.find({ campaignId: started._id, queueStatus: "queued" })
         .select("_id queueVersion")
@@ -219,6 +229,12 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         { $set: { queueConfirmedAt: new Date(), errorCode: "", errorMessage: "" } }
       );
     } catch (error) {
+      if (startClaimToken) {
+        await Campaign.updateOne(
+          { _id: params.id, status: "Draft", startClaimToken },
+          { $set: { startClaimToken: "" } }
+        );
+      }
       console.error("Campaign dispatch could not be confirmed in Redis.", error);
       await Campaign.updateOne(
         { _id: started._id },

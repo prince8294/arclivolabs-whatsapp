@@ -2,18 +2,20 @@ import type { Job } from "bullmq";
 import { connectToDatabase } from "@/lib/db/mongodb";
 import { refreshCampaignCounts } from "@/lib/campaigns/counts";
 import { applyCampaignDeliveryStatus } from "@/lib/campaigns/delivery";
+import { canDispatchRecipient } from "@/lib/campaigns/dispatch-policy";
 import { enqueueRecipients } from "@/lib/campaigns/queue";
 import Campaign from "@/lib/models/campaign";
 import CampaignRecipient from "@/lib/models/campaign-recipient";
 import Contact from "@/lib/models/contact";
-import Conversation from "@/lib/models/conversation";
 import MessageSuppression from "@/lib/models/message-suppression";
 import MessageTemplate from "@/lib/models/message-template";
 import WhatsAppMessage from "@/lib/models/whatsapp-message";
+import CampaignRecipientReservation from "@/lib/models/campaign-recipient-reservation";
 import { normalizePhoneNumber } from "@/lib/contacts/validation";
 import { getEffectiveCredentials, getStoredConnection, markConnectionError } from "@/lib/whatsapp/config";
 import { graphRequest, MetaApiError } from "@/lib/whatsapp/meta";
-import { hasActiveCustomerServiceWindow } from "@/lib/campaigns/personalized";
+import { extractComponentTemplateVariables } from "@/lib/campaigns/meta-templates";
+import { buildTemplateSendComponents } from "@/lib/campaigns/template-components";
 
 type DispatchData = { campaignId: string };
 type RecipientData = { campaignId: string; recipientId: string };
@@ -57,7 +59,21 @@ async function failRecipient(recipientId: string, code: string, message: string,
         errorCode: code,
         errorMessage: message.slice(0, 1000),
         ...(queueStatus === "excluded" ? {
-          eligibilityStatus: code === "TEMPLATE_REQUIRED" ? "Template Required" : code === "SUPPRESSED" ? "Suppressed" : "Missing Consent",
+          eligibilityStatus: code === "TEMPLATE_REQUIRED"
+            ? "Template Required"
+            : code === "SUPPRESSED"
+              ? "Suppressed"
+              : code === "DUPLICATE_PHONE"
+                ? "Duplicate Contact"
+                : code === "WRONG_CATEGORY"
+                  ? "Wrong Category"
+                  : code === "MISSING_TEMPLATE_VARIABLE"
+                    ? "Missing Variable"
+                    : code === "APPROVED_TEMPLATE_REQUIRED"
+                      ? "Excluded"
+                      : code === "TEMPLATE_NOT_APPROVED"
+                        ? "Excluded"
+                    : "Missing Consent",
           exclusionReason: message.slice(0, 1000)
         } : {}),
         updatedStatusAt: new Date()
@@ -88,14 +104,32 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
   }
   if (!["Queued", "Processing"].includes(campaign.status)) return;
 
-  const isFreeFormCsv = campaign.messageMode === "personalized_csv";
+  if (campaign.messageMode === "personalized_csv") {
+    await failRecipient(recipientId, "APPROVED_TEMPLATE_REQUIRED", "Free-form CSV messages are disabled for bulk campaigns.", "excluded");
+    return;
+  }
+  const reservation = await CampaignRecipientReservation.exists({
+    phoneNumber: recipient.phoneNumber,
+    campaignId: campaign._id,
+    campaignRecipientId: recipient._id
+  });
+  if (!canDispatchRecipient(recipient.queueStatus, Boolean(reservation))) {
+    await failRecipient(recipientId, "DUPLICATE_PHONE", "Recipient has no campaign-owned atomic reservation.", "excluded");
+    return;
+  }
   const contact = recipient.contactId ? await Contact.findById(recipient.contactId)
-    .select("phoneNumber marketingConsentStatus consentSource consentTimestamp")
+    .select("phoneNumber categoryId marketingConsentStatus consentSource consentTimestamp doNotContact")
     .lean() : null;
   const currentPhone = contact ? normalizePhoneNumber(contact.phoneNumber) : null;
+  const categoryMatches = Boolean(contact && campaign.categoryIds.some((categoryId) => categoryId.equals(contact.categoryId)));
+  if (!categoryMatches) {
+    await failRecipient(recipientId, "WRONG_CATEGORY", "Contact no longer belongs to the campaign's selected category.", "excluded");
+    return;
+  }
   const timestamp = contact?.consentTimestamp;
   const consentValid = Boolean(
     contact &&
+    !contact.doNotContact &&
     contact.marketingConsentStatus === "Opted In" &&
     contact.consentSource?.trim() &&
     timestamp instanceof Date &&
@@ -114,26 +148,25 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
     return;
   }
 
-  const template = !isFreeFormCsv && campaign.templateId ? await MessageTemplate.findById(campaign.templateId).lean() : null;
-  const snapshotTemplateValid = Boolean(
-    recipient.templateName &&
-    recipient.templateLanguage &&
+  const template = campaign.templateId ? await MessageTemplate.findById(campaign.templateId).lean() : null;
+  const liveTemplateValid = Boolean(
+    template &&
+    !template.isDraft &&
+    template.metaStatus === "APPROVED" &&
+    template.metaCategory === "MARKETING" &&
+    template.metaTemplateId &&
+    template.name === recipient.templateName &&
+    template.language === recipient.templateLanguage &&
     recipient.templateCategory === "MARKETING"
   );
-  const liveTemplateValid = Boolean(
-    template && !template.isDraft && template.metaStatus === "APPROVED" && template.metaTemplateId
-  );
-  if (!isFreeFormCsv && !snapshotTemplateValid && !liveTemplateValid) {
-    await failRecipient(recipientId, "TEMPLATE_NOT_APPROVED", "The selected template is no longer approved by Meta.");
+  if (!template || !liveTemplateValid) {
+    await failRecipient(recipientId, "TEMPLATE_NOT_APPROVED", "The selected template is no longer approved by Meta.", "excluded");
     return;
   }
-  if (isFreeFormCsv) {
-    const conversation = await Conversation.findOne({ phoneNumber: recipient.phoneNumber }).select("lastIncomingMessageAt").lean();
-    const lastIncoming = conversation?.lastIncomingMessageAt;
-    if (!recipient.originalCsvMessage || !hasActiveCustomerServiceWindow(lastIncoming)) {
-      await failRecipient(recipientId, "TEMPLATE_REQUIRED", "The 24-hour customer service window is closed; the exact CSV message was not converted or sent.", "excluded");
-      return;
-    }
+  const requiredVariables = extractComponentTemplateVariables(template);
+  if (requiredVariables.some((number) => !recipient.templateVariables[number - 1]?.trim())) {
+    await failRecipient(recipientId, "MISSING_TEMPLATE_VARIABLE", "One or more current template parameters are missing.", "excluded");
+    return;
   }
   const storedConnection = await getStoredConnection();
   if (!storedConnection || storedConnection.status !== "connected") {
@@ -151,12 +184,13 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
 
   const beforeSend = await Campaign.findById(campaignId).select("status").lean();
   const latestContact = recipient.contactId ? await Contact.findById(recipient.contactId)
-    .select("phoneNumber marketingConsentStatus consentSource consentTimestamp")
+    .select("phoneNumber categoryId marketingConsentStatus consentSource consentTimestamp doNotContact")
     .lean() : null;
   const latestPhone = latestContact ? normalizePhoneNumber(latestContact.phoneNumber) : null;
   const latestSuppression = await MessageSuppression.exists({ phoneNumber: recipient.phoneNumber });
   const latestConsent = Boolean(
     latestContact &&
+    !latestContact.doNotContact &&
     latestContact.marketingConsentStatus === "Opted In" &&
     latestContact.consentSource?.trim() &&
     latestContact.consentTimestamp instanceof Date &&
@@ -171,35 +205,31 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
     await failRecipient(recipientId, "CAMPAIGN_CANCELLED", "Campaign was cancelled before this message was sent.", "cancelled");
     return;
   }
+  const latestCategoryMatches = Boolean(
+    latestContact && campaign.categoryIds.some((categoryId) => categoryId.equals(latestContact.categoryId))
+  );
+  if (!latestCategoryMatches) {
+    await failRecipient(recipientId, "WRONG_CATEGORY", "Contact no longer belongs to the campaign's selected category.", "excluded");
+    return;
+  }
   if (!latestConsent || latestSuppression) {
     await failRecipient(recipientId, latestSuppression ? "SUPPRESSED" : "CONSENT_REVOKED", "Contact eligibility changed before sending.", "excluded");
     return;
   }
-  if (isFreeFormCsv) {
-    const latestConversation = await Conversation.findOne({ phoneNumber: recipient.phoneNumber }).select("lastIncomingMessageAt").lean();
-    const lastIncoming = latestConversation?.lastIncomingMessageAt;
-    if (!hasActiveCustomerServiceWindow(lastIncoming)) {
-      await failRecipient(recipientId, "TEMPLATE_REQUIRED", "The 24-hour customer service window closed before sending; the exact CSV message was not sent.", "excluded");
-      return;
-    }
+  const currentReservation = await CampaignRecipientReservation.exists({
+    phoneNumber: recipient.phoneNumber,
+    campaignId: campaign._id,
+    campaignRecipientId: recipient._id
+  });
+  if (!currentReservation) {
+    await failRecipient(recipientId, "DUPLICATE_PHONE", "Recipient reservation changed before send.", "excluded");
+    return;
   }
 
   try {
     const { credentials } = await getEffectiveCredentials();
-    const components: Record<string, unknown>[] = [];
-    if (!isFreeFormCsv && recipient.templateVariables.length) {
-      components.push({
-        type: "body",
-        parameters: recipient.templateVariables.map((text) => ({ type: "text", text }))
-      });
-    }
-    const requestBody = isFreeFormCsv ? {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to: recipient.phoneNumber.replace(/^\+/, ""),
-      type: "text",
-      text: { preview_url: false, body: recipient.originalCsvMessage }
-    } : {
+    const components = buildTemplateSendComponents(template, recipient.templateVariables);
+    const requestBody = {
       messaging_product: "whatsapp",
       to: recipient.phoneNumber.replace(/^\+/, ""),
       type: "template",
@@ -228,14 +258,13 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
     const deliveryStatus = ["accepted", "sent", "delivered", "read", "failed"].includes(reported) ? reported : "accepted";
     const rank = { accepted: 0, sent: 1, delivered: 2, read: 3, failed: 2 }[deliveryStatus as "accepted" | "sent" | "delivered" | "read" | "failed"];
     const errorCode = deliveryStatus === "failed" ? "META_MESSAGE_FAILED" : "";
-    const renderedBody = isFreeFormCsv
-      ? recipient.originalCsvMessage
-      : recipient.renderedMessage || template!.body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, number: string) =>
+    const renderedBody = recipient.renderedMessage || template!.body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, number: string) =>
         recipient.templateVariables[Number(number) - 1] ?? ""
       );
-    const finalRenderedMessage = isFreeFormCsv
-      ? renderedBody
-      : recipient.renderedMessage || [template!.header, renderedBody, template!.footer].filter(Boolean).join("\n\n");
+    const buttonPreview = template!.buttons.map((button) =>
+      `${button.text}${button.url ? ` · ${button.url.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, number: string) => recipient.templateVariables[Number(number) - 1] ?? "")}` : ""}`
+    );
+    const finalRenderedMessage = recipient.renderedMessage || [template!.header, renderedBody, template!.footer, ...buttonPreview].filter(Boolean).join("\n\n");
     await WhatsAppMessage.updateOne(
       { messageId },
       {
@@ -245,9 +274,9 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
           whatsappContactId: recipient.phoneNumber.replace(/^\+/, ""),
           phoneNumber: recipient.phoneNumber,
           contactName: recipient.contactPerson,
-          messageType: isFreeFormCsv ? "text" : "template",
+          messageType: "template",
           content: finalRenderedMessage,
-          metadata: isFreeFormCsv ? { source: "personalized_csv" } : {
+          metadata: {
             templateName: recipient.templateName || template!.name,
             templateLanguage: recipient.templateLanguage || template!.language
           },

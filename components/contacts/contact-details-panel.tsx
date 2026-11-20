@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, Mail, MapPin, Pencil, Phone, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
+import { CalendarDays, Mail, MapPin, Pencil, Phone, ShieldCheck, ShieldOff, Trash2, UserRound, X } from "lucide-react";
 import type { ContactRecord } from "@/components/contacts/types";
 import { getContactCategoryName } from "@/components/contacts/types";
 
@@ -10,6 +10,7 @@ type Props = {
   onEdit: () => void;
   onDelete: () => void;
   onConsent: () => void;
+  onDoNotContact: () => void;
 };
 
 function formatDate(value?: string | null) {
@@ -18,7 +19,7 @@ function formatDate(value?: string | null) {
   return Number.isNaN(date.getTime()) ? "Not recorded" : date.toLocaleString();
 }
 
-export function ContactDetailsPanel({ contact, onClose, onEdit, onDelete, onConsent }: Props) {
+export function ContactDetailsPanel({ contact, onClose, onEdit, onDelete, onConsent, onDoNotContact }: Props) {
   const details = [
     { label: "Contact person", value: contact.contactPerson || "Not provided", icon: UserRound },
     { label: "WhatsApp number", value: contact.phoneNumber, icon: Phone },
@@ -48,6 +49,9 @@ export function ContactDetailsPanel({ contact, onClose, onEdit, onDelete, onCons
           <button onClick={onConsent} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--accent-soft)] text-xs font-semibold text-[var(--accent)] hover:opacity-80">
             <ShieldCheck size={14} /> Manage consent
           </button>
+          <button onClick={onDoNotContact} aria-label={contact.doNotContact ? "Remove Do Not Contact flag" : "Mark Do Not Contact"} title={contact.doNotContact ? "Remove Do Not Contact" : "Mark Do Not Contact"} className="flex h-9 w-10 items-center justify-center rounded-xl border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-muted)]">
+            {contact.doNotContact ? <ShieldOff size={15} /> : <ShieldCheck size={15} />}
+          </button>
           <button onClick={onDelete} aria-label="Delete contact" className="flex h-9 w-10 items-center justify-center rounded-xl border border-red-500/20 text-red-600 hover:bg-red-500/10 dark:text-red-400">
             <Trash2 size={15} />
           </button>
@@ -67,6 +71,7 @@ export function ContactDetailsPanel({ contact, onClose, onEdit, onDelete, onCons
 
           <section className="border-t border-[var(--border)] pt-5">
             <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">Marketing consent</p>
+            {contact.doNotContact && <p className="mt-2 rounded-lg bg-red-500/10 px-3 py-2 text-[10px] font-semibold text-red-700 dark:text-red-300">Do Not Contact — campaign messages are blocked.</p>}
             <div className="mt-3 flex items-center justify-between gap-3">
               <span className="text-xs font-semibold">{contact.marketingConsentStatus}</span>
               <span className={`rounded-full px-2.5 py-1 text-[9px] font-semibold ${

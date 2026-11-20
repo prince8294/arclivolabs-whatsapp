@@ -1,6 +1,11 @@
 import { Types } from "mongoose";
 import { scanAudience, type EligibleRecipient } from "@/lib/campaigns/audience";
 import CampaignRecipient from "@/lib/models/campaign-recipient";
+import {
+  existingCampaignReservations,
+  reserveCampaignRecipients
+} from "@/lib/campaigns/reservations";
+import { extractComponentTemplateVariables } from "@/lib/campaigns/meta-templates";
 
 type CampaignSnapshotSource = {
   _id: Types.ObjectId;
@@ -17,11 +22,18 @@ type TemplateSnapshotSource = {
   body: string;
   header: string;
   footer: string;
+  buttons: { text: string; url?: string }[];
 };
 
 function eligibleDocument(campaignId: Types.ObjectId, recipient: EligibleRecipient, template: TemplateSnapshotSource) {
   const renderedBody = template.body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, number: string) =>
     recipient.templateVariables[Number(number) - 1] ?? ""
+  );
+  const renderedHeader = template.header.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, number: string) =>
+    recipient.templateVariables[Number(number) - 1] ?? ""
+  );
+  const renderedButtons = template.buttons.map((button) =>
+    `${button.text ?? ""}${button.url ? ` · ${button.url.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, number: string) => recipient.templateVariables[Number(number) - 1] ?? "")}` : ""}`
   );
   return {
     campaignId,
@@ -38,7 +50,7 @@ function eligibleDocument(campaignId: Types.ObjectId, recipient: EligibleRecipie
     templateLanguage: template.language,
     templateCategory: template.metaCategory,
     templateVariables: recipient.templateVariables,
-    renderedMessage: [template.header, renderedBody, template.footer].filter(Boolean).join("\n\n"),
+    renderedMessage: [renderedHeader, renderedBody, template.footer, ...renderedButtons].filter(Boolean).join("\n\n"),
     eligibilityStatus: "Ready to Send" as const,
     queueStatus: "queued" as const,
     deliveryStatus: "pending" as const
@@ -58,15 +70,48 @@ export async function createCampaignRecipientSnapshot(
   for await (const batch of scanAudience({
     categoryIds: campaign.categoryIds.map(String),
     cities: campaign.cities,
+    campaignId: String(campaign._id),
     variableMappings: campaign.variableMappings.map((item) => ({
       number: item.number,
       mapping: item.mapping as "contactPerson" | "businessName" | "city"
     })),
-    body: template.body
+    body: template.body,
+    variableNumbers: extractComponentTemplateVariables(template)
   })) {
+    const savedContactIds = new Set<string>();
+    const recipientIds = await existingCampaignReservations(
+      campaign._id,
+      batch.eligible.map((recipient) => recipient.phoneNumber)
+    );
+    const eligibleCandidates = batch.eligible.map((recipient) => ({
+      recipient,
+      recipientId: recipientIds.get(recipient.phoneNumber) ?? new Types.ObjectId()
+    }));
+    const reserved = await reserveCampaignRecipients(eligibleCandidates.map(({ recipient, recipientId }) => ({
+      phoneNumber: recipient.phoneNumber,
+      campaignId: campaign._id,
+      campaignRecipientId: recipientId
+    })));
+    const reservedEligible = eligibleCandidates.filter(({ recipientId }) => reserved.has(String(recipientId)));
+    const reservationExcluded = eligibleCandidates
+      .filter(({ recipientId }) => !reserved.has(String(recipientId)))
+      .map(({ recipient }) => ({
+        ...recipient,
+        errorCode: "DUPLICATE_PHONE",
+        errorMessage: "Another campaign reserved this number first."
+      }));
     const documents = [
-      ...batch.eligible.map((recipient) => eligibleDocument(campaign._id, recipient, template)),
-      ...batch.excluded.map((recipient) => ({
+      ...reservedEligible.flatMap(({ recipient, recipientId }) => {
+        const key = String(recipient.contactId);
+        if (savedContactIds.has(key)) return [];
+        savedContactIds.add(key);
+        return [{ _id: recipientId, ...eligibleDocument(campaign._id, recipient, template) }];
+      }),
+      ...[...batch.excluded, ...reservationExcluded].flatMap((recipient) => {
+        const key = String(recipient.contactId);
+        if (savedContactIds.has(key)) return [];
+        savedContactIds.add(key);
+        return [{
         campaignId: campaign._id,
         contactId: recipient.contactId,
         phoneNumber: recipient.phoneNumber,
@@ -88,17 +133,20 @@ export async function createCampaignRecipientSnapshot(
               ? "Duplicate Contact" as const
               : recipient.errorCode === "MISSING_TEMPLATE_VARIABLE"
                 ? "Missing Variable" as const
+                : recipient.errorCode === "WRONG_CATEGORY"
+                  ? "Wrong Category" as const
                 : "Missing Consent" as const,
         exclusionReason: recipient.errorMessage,
         queueStatus: "excluded" as const,
         deliveryStatus: "pending" as const,
         errorCode: recipient.errorCode,
         errorMessage: recipient.errorMessage
-      }))
+        }];
+      })
     ];
     if (documents.length) await CampaignRecipient.insertMany(documents, { ordered: false });
-    eligible += batch.eligible.length;
-    excluded += batch.excluded.length;
+    eligible += reservedEligible.length;
+    excluded += batch.excluded.length + reservationExcluded.length + (batch.eligible.length - reservedEligible.length);
   }
   return { total: eligible + excluded, eligible, excluded };
 }

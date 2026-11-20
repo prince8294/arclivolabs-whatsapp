@@ -57,6 +57,21 @@ export function supportedTemplateComponents(value: unknown) {
   return body ? { body, header, footer, buttons } : null;
 }
 
+export function extractComponentTemplateVariables(components: {
+  body: string;
+  header: string;
+  buttons: { url?: string }[];
+}) {
+  const values = [components.header, components.body, ...components.buttons.map((button) => button.url ?? "")];
+  return [...new Set(values.flatMap((text) => {
+    const found: number[] = [];
+    const pattern = /\{\{\s*(\d+)\s*\}\}/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) found.push(Number(match[1]));
+    return found;
+  }))].sort((a, b) => a - b);
+}
+
 export async function requireMetaCredentials() {
   return getEffectiveCredentials();
 }

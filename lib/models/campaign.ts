@@ -26,6 +26,9 @@ const campaignSchema = new Schema(
     templateLanguage: { type: String, default: "", maxlength: 20 },
     templateCategory: { type: String, default: "", maxlength: 40 },
     templateBody: { type: String, default: "", maxlength: 1024 },
+    templateHeader: { type: String, default: "", maxlength: 60 },
+    templateFooter: { type: String, default: "", maxlength: 60 },
+    templateButtons: { type: [Schema.Types.Mixed], default: [] },
     variableMappings: { type: [variableMappingSchema], default: [] },
     status: {
       type: String,
@@ -33,6 +36,7 @@ const campaignSchema = new Schema(
       default: "Draft",
       index: true
     },
+    startClaimToken: { type: String, default: "", select: false },
     dispatchVersion: { type: Number, default: 1 },
     dispatchStatus: { type: String, enum: ["pending", "processing", "completed", "failed"], default: "pending" },
     queueConfirmedAt: { type: Date, default: null },
