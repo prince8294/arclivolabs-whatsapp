@@ -214,8 +214,10 @@ export function TemplatesPage() {
                       <td className="px-5 py-3.5"><div className="flex justify-end gap-1">
                         <button aria-label={`View ${template.name}`} title="View" onClick={() => setViewing(template)} className="rounded-lg p-2 text-[var(--muted)] hover:bg-[var(--surface-muted)] hover:text-[var(--foreground)]"><Eye size={14} /></button>
                         {template.isDraft
-                          ? <Link aria-label={`Edit ${template.name}`} title="Edit" href={`/dashboard/templates/${template._id}/edit`} className="rounded-lg p-2 text-[var(--muted)] hover:bg-[var(--surface-muted)] hover:text-[var(--foreground)]"><Pencil size={14} /></Link>
-                          : <button aria-label={`Edit ${template.name} unavailable`} title="Meta-submitted templates are read-only. Create a new draft to revise." disabled className="rounded-lg p-2 text-[var(--muted)] opacity-40"><Pencil size={14} /></button>}
+                          ? <Link aria-label={`Edit ${template.name}`} title="Edit draft" href={`/dashboard/templates/${template._id}/edit`} className="rounded-lg p-2 text-[var(--muted)] hover:bg-[var(--surface-muted)] hover:text-[var(--foreground)]"><Pencil size={14} /></Link>
+                          : normalized === "APPROVED"
+                            ? <Link aria-label={`Edit category for ${template.name}`} title="Edit business category only" href={`/dashboard/templates/${template._id}/edit`} className="rounded-lg p-2 text-[var(--muted)] hover:bg-[var(--surface-muted)] hover:text-[var(--foreground)]"><Pencil size={14} /></Link>
+                            : <button aria-label={`Edit ${template.name} unavailable`} title="Only approved Meta templates allow category editing." disabled className="rounded-lg p-2 text-[var(--muted)] opacity-40"><Pencil size={14} /></button>}
                         {!template.isDraft && <button aria-label={`Refresh ${template.name}`} title="Check Status" onClick={() => void synchronize("refresh")} disabled={Boolean(busy)} className="rounded-lg p-2 text-[var(--muted)] hover:bg-[var(--surface-muted)]"><RefreshCw size={14} /></button>}
                         <button aria-label={`Delete ${template.name}`} title="Delete local record" disabled={busy === template._id} onClick={() => void removeTemplate(template)} className="rounded-lg p-2 text-[var(--muted)] hover:bg-rose-500/10 hover:text-rose-600 disabled:opacity-50"><Trash2 size={14} /></button>
                       </div></td>

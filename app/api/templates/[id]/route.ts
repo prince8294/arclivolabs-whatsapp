@@ -58,7 +58,50 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
   } catch {
     return NextResponse.json({ error: { code: "INVALID_JSON", message: "Request body must be valid JSON." } }, { status: 400 });
   }
+  const rawBody = body && typeof body === "object" && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : null;
+  const categoryOnlyUpdate =
+    Boolean(rawBody) &&
+    Object.keys(rawBody ?? {}).length === 1 &&
+    typeof rawBody?.businessCategoryId === "string";
   const parsed = validateTemplateInput(body);
+  if (categoryOnlyUpdate) {
+    const businessCategoryId = String(rawBody?.businessCategoryId ?? "");
+    if (businessCategoryId && !mongoose.isValidObjectId(businessCategoryId)) {
+      return NextResponse.json({ error: { code: "INVALID_CATEGORY", message: "Select a valid business category." } }, { status: 400 });
+    }
+    try {
+      await connectToDatabase();
+      const current = await MessageTemplate.findById(params.id);
+      if (!current) {
+        return NextResponse.json({ error: { code: "NOT_FOUND", message: "Template not found." } }, { status: 404 });
+      }
+      if (current.isDraft) {
+        return NextResponse.json({ error: { code: "INVALID_CATEGORY_UPDATE", message: "Use the full template editor for draft templates." } }, { status: 409 });
+      }
+      if (businessCategoryId && !(await Category.exists({ _id: businessCategoryId }))) {
+        return NextResponse.json({ error: { code: "CATEGORY_NOT_FOUND", message: "The selected business category no longer exists." } }, { status: 400 });
+      }
+      current.businessCategoryId = businessCategoryId ? new mongoose.Types.ObjectId(businessCategoryId) : null;
+      await current.save();
+      const category = businessCategoryId
+        ? await Category.findById(businessCategoryId).select("name").lean()
+        : null;
+      return NextResponse.json({
+        template: {
+          ...current.toObject(),
+          _id: current._id.toString(),
+          businessCategoryId,
+          businessCategory: category?.name ?? "",
+          variableSamples: Object.fromEntries(current.variableSamples ?? new Map())
+        }
+      });
+    } catch (error) {
+      console.error("Template category could not be updated.", error);
+      return NextResponse.json({ error: { code: "TEMPLATE_REQUEST_FAILED", message: "Template category could not be updated." } }, { status: 500 });
+    }
+  }
   if (!parsed.ok) return NextResponse.json({ error: { code: "INVALID_TEMPLATE", message: parsed.message } }, { status: 400 });
   const input = parsed.value;
   if (input.businessCategoryId && !mongoose.isValidObjectId(input.businessCategoryId)) {

@@ -11,6 +11,8 @@ type EditorTemplate = {
   _id?: string;
   name: string;
   businessCategoryId: string;
+  isDraft?: boolean;
+  metaStatus?: string;
   metaCategory: "MARKETING" | "UTILITY" | "AUTHENTICATION";
   language: string;
   header: string;
@@ -68,6 +70,7 @@ export function TemplateEditor({ templateId }: TemplateEditorProps) {
   const [busy, setBusy] = useState<"save" | "submit" | "">("");
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [submissionResult, setSubmissionResult] = useState<{ templateId: string; status: string; category: string } | null>(null);
+  const [categoryOnly, setCategoryOnly] = useState(false);
   const [languageOption, setLanguageOption] = useState("en");
   const [otherLanguage, setOtherLanguage] = useState("");
 
@@ -90,12 +93,12 @@ export function TemplateEditor({ templateId }: TemplateEditorProps) {
       if (!active) return;
       setCategories(categoryRows);
       if (existing) {
-        if (!("isDraft" in existing) || existing.isDraft !== true) {
-          setNotice("Templates already submitted to Meta cannot be edited here. Create a new draft to make changes and submit it for review.");
-          setState("error");
-          return;
-        }
         setTemplate(existing);
+        const submittedTemplate = existing.isDraft === false;
+        setCategoryOnly(submittedTemplate);
+        if (submittedTemplate) {
+          setNotice("Meta template content is read-only. You can only change the local business category.");
+        }
         const language = existing.language;
         if (language === "en" || language === "hi") setLanguageOption(language);
         else { setLanguageOption("other"); setOtherLanguage(language); }
@@ -148,6 +151,26 @@ export function TemplateEditor({ templateId }: TemplateEditorProps) {
   }
 
   async function saveDraft() {
+    if (categoryOnly) {
+      setBusy("save");
+      setNotice("");
+      try {
+        const response = await fetch(`/api/templates/${savedId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ businessCategoryId: template.businessCategoryId })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message ?? "Template category could not be saved.");
+        setTemplate((current) => ({ ...current, ...result.template }));
+        setNotice("Business category updated. Meta template content was unchanged.");
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Template category could not be saved.");
+      } finally {
+        setBusy("");
+      }
+      return;
+    }
     const validation = validateBeforeSave();
     if (validation) { setNotice(validation); return; }
     setBusy("save");
@@ -269,8 +292,8 @@ export function TemplateEditor({ templateId }: TemplateEditorProps) {
     <div className="space-y-5">
       <header>
         <Link href="/dashboard/templates" className="mb-3 inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--muted)] hover:text-[var(--foreground)]"><ArrowLeft size={14} /> Back to templates</Link>
-        <h1 className="text-[24px] font-semibold tracking-[-0.04em]">{templateId ? "Edit Draft" : "Create Template"}</h1>
-        <p className="mt-1 text-[13px] text-[var(--muted)]">Create an editable draft, preview it, then submit it for Meta review when ready.</p>
+        <h1 className="text-[24px] font-semibold tracking-[-0.04em]">{categoryOnly ? "Edit Template Category" : templateId ? "Edit Draft" : "Create Template"}</h1>
+        <p className="mt-1 text-[13px] text-[var(--muted)]">{categoryOnly ? "Change only the CRM business category assigned to this Meta template." : "Create an editable draft, preview it, then submit it for Meta review when ready."}</p>
       </header>
       {notice && <div role="status" className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-xs">{notice}</div>}
       {submissionResult ? <section role="status" className="surface soft-shadow mx-auto max-w-xl rounded-2xl p-6 sm:p-8">
@@ -284,25 +307,25 @@ export function TemplateEditor({ templateId }: TemplateEditorProps) {
           : <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(300px,.8fr)]">
             <section className="surface soft-shadow rounded-2xl p-4 sm:p-5">
               <div className="grid gap-4 sm:grid-cols-2">
-                <label className={labelClass}>Template name<input value={template.name} onChange={(event) => update("name", event.target.value.toLowerCase())} placeholder="e.g. school_promotion" className={fieldClass} maxLength={512} /></label>
+                <label className={labelClass}>Template name<input value={template.name} onChange={(event) => update("name", event.target.value.toLowerCase())} placeholder="e.g. school_promotion" className={fieldClass} maxLength={512} disabled={categoryOnly} /></label>
                 <label className={labelClass}>Business category<select value={template.businessCategoryId} onChange={(event) => update("businessCategoryId", event.target.value)} className={fieldClass}><option value="">Select a category</option>{categories.map((item) => <option key={item._id} value={item._id}>{item.name}</option>)}</select></label>
-                <label className={labelClass}>Template language<select value={languageOption} onChange={(event) => setLanguageOption(event.target.value)} className={fieldClass}><option value="en">English (en)</option><option value="hi">Hindi (hi)</option><option value="other">Other Meta language...</option></select>{languageOption === "other" && <input value={otherLanguage} onChange={(event) => setOtherLanguage(event.target.value)} placeholder="Language code, e.g. en_US" className={fieldClass} />}</label>
-                <label className={labelClass}>Meta template category<select value={template.metaCategory} onChange={(event) => update("metaCategory", event.target.value as EditorTemplate["metaCategory"])} className={fieldClass}><option value="MARKETING">Marketing</option><option value="UTILITY">Utility</option><option value="AUTHENTICATION">Authentication</option></select><span className="mt-1 block text-[10px] font-normal text-[var(--muted)]">Separate from your business category.</span></label>
+                <label className={labelClass}>Template language<select value={languageOption} onChange={(event) => setLanguageOption(event.target.value)} className={fieldClass} disabled={categoryOnly}><option value="en">English (en)</option><option value="hi">Hindi (hi)</option><option value="other">Other Meta language...</option></select>{languageOption === "other" && <input value={otherLanguage} onChange={(event) => setOtherLanguage(event.target.value)} placeholder="Language code, e.g. en_US" className={fieldClass} disabled={categoryOnly} />}</label>
+                <label className={labelClass}>Meta template category<select value={template.metaCategory} onChange={(event) => update("metaCategory", event.target.value as EditorTemplate["metaCategory"])} className={fieldClass} disabled={categoryOnly}><option value="MARKETING">Marketing</option><option value="UTILITY">Utility</option><option value="AUTHENTICATION">Authentication</option></select><span className="mt-1 block text-[10px] font-normal text-[var(--muted)]">Separate from your business category.</span></label>
               </div>
 
-              <div className="mt-5 border-t border-[var(--border)] pt-4">
+              {!categoryOnly && <div className="mt-5 border-t border-[var(--border)] pt-4">
                 <div className="mb-3 flex items-center justify-between"><h2 className="text-xs font-semibold">Start with a category example</h2><span className="text-[10px] text-[var(--muted)]">Editable · not pre-approved</span></div>
                 <div className="flex flex-wrap gap-2">{examples.map((example, index) => <button key={example.name} type="button" onClick={() => applyExample(index)} className="rounded-lg border border-[var(--border)] px-2.5 py-2 text-[10px] font-medium hover:bg-[var(--surface-muted)]">{example.category}</button>)}</div>
-              </div>
+              </div>}
 
-              <div className="mt-5 space-y-4 border-t border-[var(--border)] pt-4">
+              {!categoryOnly && <div className="mt-5 space-y-4 border-t border-[var(--border)] pt-4">
                 <h2 className="text-xs font-semibold">Message components</h2>
                 <label className={labelClass}>Header <span className="font-normal text-[var(--muted)]">(optional text)</span><input value={template.header} onChange={(event) => update("header", event.target.value)} maxLength={60} placeholder="Short message heading" className={fieldClass} /></label>
                 <label className={labelClass}>Body <span className="text-rose-600">*</span><textarea value={template.body} onChange={(event) => update("body", event.target.value)} maxLength={1024} rows={8} placeholder="Write the WhatsApp message. Use {{1}}, {{2}}, etc. for variables." className={`${fieldClass} resize-y leading-5`} /><span className="mt-1 block text-right text-[10px] font-normal text-[var(--muted)]">{template.body.length}/1024</span></label>
                 <label className={labelClass}>Footer <span className="font-normal text-[var(--muted)]">(optional)</span><input value={template.footer} onChange={(event) => update("footer", event.target.value)} maxLength={60} placeholder="Company signature or opt-out information" className={fieldClass} /></label>
-              </div>
+              </div>}
 
-              {variables.length > 0 && <div className="mt-5 rounded-xl border border-[var(--border)] p-3.5">
+              {!categoryOnly && variables.length > 0 && <div className="mt-5 rounded-xl border border-[var(--border)] p-3.5">
                 <div className="flex items-start gap-2"><Info size={15} className="mt-0.5 shrink-0 text-[var(--accent)]" /><div><h2 className="text-xs font-semibold">Variable examples & CRM mappings</h2><p className="mt-1 text-[10px] leading-4 text-[var(--muted)]">Meta requires sample values for variables during review. Mappings are stored for later campaign work only.</p></div></div>
                 <div className="mt-3 space-y-3">{variables.map((number) => <div key={number} className="grid gap-2 sm:grid-cols-[70px_1fr_150px] sm:items-end">
                   <span className="pb-2 text-[11px] font-semibold">{`{{${number}}}`}</span>
@@ -311,18 +334,18 @@ export function TemplateEditor({ templateId }: TemplateEditorProps) {
                 </div>)}</div>
               </div>}
 
-              <div className="mt-5 border-t border-[var(--border)] pt-4">
+              {!categoryOnly && <div className="mt-5 border-t border-[var(--border)] pt-4">
                 <div className="flex items-center justify-between"><div><h2 className="text-xs font-semibold">Buttons <span className="font-normal text-[var(--muted)]">(optional)</span></h2><p className="mt-1 text-[10px] text-[var(--muted)]">Up to 3 quick replies, or one website button.</p></div><div className="flex gap-2"><button type="button" onClick={() => addButton("QUICK_REPLY")} className="rounded-lg border border-[var(--border)] px-2.5 py-2 text-[10px] font-semibold">+ Quick reply</button><button type="button" onClick={() => addButton("URL")} className="rounded-lg border border-[var(--border)] px-2.5 py-2 text-[10px] font-semibold">+ Website</button></div></div>
                 <div className="mt-3 space-y-2">{template.buttons.map((button, index) => <div key={index} className="flex items-start gap-2 rounded-xl bg-[var(--surface-muted)] p-3">
                   <div className="grid flex-1 gap-2 sm:grid-cols-2"><label className="text-[10px] font-medium">Button label<input value={button.text} maxLength={25} onChange={(event) => update("buttons", template.buttons.map((item, current) => current === index ? { ...item, text: event.target.value } : item))} className={fieldClass} /></label>{button.type === "URL" && <label className="text-[10px] font-medium">HTTPS website URL<input value={button.url ?? ""} onChange={(event) => update("buttons", template.buttons.map((item, current) => current === index ? { ...item, url: event.target.value } : item))} placeholder="https://example.com" className={fieldClass} /></label>}</div>
                   <button type="button" aria-label="Remove button" onClick={() => update("buttons", template.buttons.filter((_, current) => current !== index))} className="mt-5 rounded-lg p-2 text-[var(--muted)] hover:bg-rose-500/10 hover:text-rose-600"><Trash2 size={14} /></button>
                 </div>)}</div>
-              </div>
+              </div>}
 
               <div className="mt-5 flex flex-wrap justify-end gap-2 border-t border-[var(--border)] pt-4">
                 <Link href="/dashboard/templates" className="inline-flex h-10 items-center rounded-xl border border-[var(--border)] px-3.5 text-xs font-semibold">Cancel</Link>
-                <button type="button" disabled={Boolean(busy)} onClick={() => void saveDraft()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--border)] px-3.5 text-xs font-semibold hover:bg-[var(--surface-muted)] disabled:opacity-50"><Save size={14} />{busy === "save" ? "Saving..." : "Save Draft"}</button>
-                <button type="button" disabled={Boolean(busy)} onClick={() => { const error = validateBeforeSave(); if (error) setNotice(error); else setConfirmSubmit(true); }} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#128c50] px-3.5 text-xs font-semibold text-white hover:bg-[#0f7944] disabled:opacity-50"><Send size={14} /> Submit for Approval</button>
+                <button type="button" disabled={Boolean(busy)} onClick={() => void saveDraft()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--border)] px-3.5 text-xs font-semibold hover:bg-[var(--surface-muted)] disabled:opacity-50"><Save size={14} />{busy === "save" ? "Saving..." : categoryOnly ? "Save Category" : "Save Draft"}</button>
+                {!categoryOnly && <button type="button" disabled={Boolean(busy)} onClick={() => { const error = validateBeforeSave(); if (error) setNotice(error); else setConfirmSubmit(true); }} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#128c50] px-3.5 text-xs font-semibold text-white hover:bg-[#0f7944] disabled:opacity-50"><Send size={14} /> Submit for Approval</button>}
               </div>
             </section>
 
