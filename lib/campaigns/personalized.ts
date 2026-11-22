@@ -144,9 +144,10 @@ export async function inspectPersonalizedRows(
       .select("businessName phoneNumber categoryId city marketingConsentStatus consentSource consentTimestamp doNotContact")
       .lean(),
     MessageSuppression.find({ phoneNumber: { $in: normalizedNumbers } }).select("phoneNumber").lean(),
-    mode === "approved_template" && Types.ObjectId.isValid(templateId)
+    mode === "approved_template" && Types.ObjectId.isValid(templateId) && Types.ObjectId.isValid(selectedCategoryId)
       ? MessageTemplate.findOne({
           _id: templateId,
+          businessCategoryId: new Types.ObjectId(selectedCategoryId),
           isDraft: false,
           metaStatus: "APPROVED",
           metaCategory: "MARKETING",

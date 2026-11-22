@@ -7,6 +7,7 @@ import { middleware } from "../middleware";
 import { percentage, safeCsvCell } from "../lib/analytics/reporting";
 import { hasActiveCustomerServiceWindow, hasRequiredTemplateVariables, normalizeImportedConsent, parsePersonalizedRows, renderApprovedTemplate } from "../lib/campaigns/personalized";
 import { normalizedRedisUrl, sendJobId } from "../lib/campaigns/queue";
+import { templateMatchesCategory, templatesForCategory } from "../lib/campaigns/template-category";
 import { normalizePhoneNumber } from "../lib/contacts/validation";
 import { evaluatePersonalizedRows, type PersonalizedPolicyContact, type PersonalizedPolicyRow } from "../lib/campaigns/personalized-policy";
 import { canDispatchRecipient, canStartCampaign } from "../lib/campaigns/dispatch-policy";
@@ -117,6 +118,18 @@ test("Redis configuration accepts TLS URLs and safely extracts the URL from an U
 test("recipient queue job IDs are deterministic across recovery runs", () => {
   assert.equal(sendJobId("recipient-id", 1), sendJobId("recipient-id", 1));
   assert.notEqual(sendJobId("recipient-id", 1), sendJobId("recipient-id", 2));
+});
+
+test("campaign templates are restricted to the selected business category", () => {
+  const templates = [
+    { _id: "school-template", businessCategoryId: "school" },
+    { _id: "gym-template", businessCategoryId: "gym" },
+    { _id: "unassigned-template", businessCategoryId: "" }
+  ];
+  assert.deepEqual(templatesForCategory(templates, "gym").map((template) => template._id), ["gym-template"]);
+  assert.equal(templateMatchesCategory(templates[1], "gym"), true);
+  assert.equal(templateMatchesCategory(templates[0], "gym"), false);
+  assert.deepEqual(templatesForCategory(templates, ""), []);
 });
 
 const categoryId = new Types.ObjectId();

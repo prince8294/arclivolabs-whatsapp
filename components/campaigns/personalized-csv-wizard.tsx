@@ -6,6 +6,7 @@ import { useMemo, useState, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { ArrowLeft, Check, Download, FileSpreadsheet, LoaderCircle, Send, Upload, X } from "lucide-react";
+import { templateMatchesCategory, templatesForCategory } from "@/lib/campaigns/template-category";
 
 type CsvSource = Record<string, string>;
 type Field =
@@ -57,6 +58,8 @@ type Summary = {
 type Template = {
   _id: string;
   name: string;
+  businessCategoryId: string;
+  businessCategory: string;
   language: string;
   body: string;
   header: string;
@@ -152,6 +155,20 @@ export function PersonalizedCsvWizard() {
   }, []);
 
   const selectedTemplate = templates.find((item) => item._id === templateId);
+  const availableTemplates = useMemo(
+    () => templatesForCategory(templates, selectedCategoryId),
+    [templates, selectedCategoryId]
+  );
+
+  function selectCategory(categoryId: string) {
+    setSelectedCategoryId(categoryId);
+    setTemplateId((currentTemplateId) => {
+      const current = templates.find((template) => template._id === currentTemplateId);
+      return templateMatchesCategory(current, categoryId) ? currentTemplateId : "";
+    });
+    setPreviewRows([]);
+    setSummary(null);
+  }
   const normalizedRows = useMemo<NormalizedRow[]>(() => sourceRows.map((source, index) => {
     const get = (field: Field) => mapping[field] ? source[mapping[field]!] ?? "" : "";
     const businessName = get("businessName").trim();
@@ -359,19 +376,20 @@ export function PersonalizedCsvWizard() {
       <section className="surface soft-shadow rounded-2xl p-5">
         <h2 className="text-sm font-semibold">Choose one category and approved template</h2>
         <label className="mt-4 block text-[11px] font-semibold">Business category
-          <select value={selectedCategoryId} onChange={(event) => setSelectedCategoryId(event.target.value)} className={`mt-1 ${inputClass}`}>
+          <select value={selectedCategoryId} onChange={(event) => selectCategory(event.target.value)} className={`mt-1 ${inputClass}`}>
             <option value="">Select one category</option>
             {categories.map((category) => <option value={category._id} key={category._id}>{category.name}</option>)}
           </select>
         </label>
         <label className="mt-3 block text-[11px] font-semibold">Approved WhatsApp marketing template
-          <select value={templateId} onChange={(event) => setTemplateId(event.target.value)} className={`mt-1 ${inputClass}`}>
+          <select value={templateId} onChange={(event) => setTemplateId(event.target.value)} disabled={!selectedCategoryId || !availableTemplates.length} className={`mt-1 ${inputClass} disabled:cursor-not-allowed disabled:opacity-60`}>
             <option value="">Select approved template</option>
-            {templates.map((template) => <option value={template._id} key={template._id}>{template.name} · {template.language}</option>)}
+            {availableTemplates.map((template) => <option value={template._id} key={template._id}>{template.name} · {template.language}</option>)}
           </select>
         </label>
         {!configurationLoaded && <p className="mt-3 text-[10px] text-[var(--muted)]">Loading connected categories and Meta-approved templates…</p>}
         {configurationLoaded && !templates.length && <p className="mt-3 text-[10px] text-amber-700">No eligible approved templates are available. Connect WhatsApp and sync a Marketing template first.</p>}
+        {configurationLoaded && selectedCategoryId && templates.length > 0 && !availableTemplates.length && <p className="mt-3 text-[10px] text-amber-700">No approved Marketing template is assigned to {selectedCategory?.name ?? "this category"}. Assign the correct business category from Templates first.</p>}
         {selectedTemplate && <div className="mt-4 rounded-xl bg-[#e8eee9] p-3 text-xs text-[#172b19]">
           <p className="mb-2 text-[9px] font-semibold uppercase">Approved template preview</p>
           {selectedTemplate.header && <p className="font-semibold">{selectedTemplate.header}</p>}

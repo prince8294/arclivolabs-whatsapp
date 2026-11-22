@@ -67,6 +67,14 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       if (!template || template.isDraft || !template.metaTemplateId) {
         return NextResponse.json({ error: { code: "TEMPLATE_NOT_APPROVED", message: "Selected template has not been submitted to Meta." } }, { status: 400 });
       }
+      if (!template.businessCategoryId || String(template.businessCategoryId) !== String(campaign.categoryIds[0])) {
+        return NextResponse.json({
+          error: {
+            code: "TEMPLATE_CATEGORY_MISMATCH",
+            message: "The selected template is not assigned to this campaign's business category. Choose the category-specific approved template."
+          }
+        }, { status: 400 });
+      }
       const { credentials } = await getEffectiveCredentials();
       const remoteTemplates = await listMetaTemplates(credentials, credentials.wabaId);
       const remote = remoteTemplates.find((item) =>
