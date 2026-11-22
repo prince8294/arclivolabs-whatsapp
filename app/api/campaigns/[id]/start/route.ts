@@ -115,6 +115,8 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       template.metaCategory = remoteCategory;
       template.body = components.body;
       template.header = components.header;
+      template.headerFormat = components.headerFormat;
+      template.headerMediaUrl = components.headerMediaUrl;
       template.footer = components.footer;
       template.set("buttons", components.buttons);
       template.variables = variables;
@@ -125,6 +127,8 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       campaign.templateCategory = template.metaCategory;
       campaign.templateBody = template.body;
       campaign.templateHeader = template.header;
+      campaign.templateHeaderFormat = components.headerFormat;
+      campaign.templateHeaderMediaUrl = components.headerMediaUrl;
       campaign.templateFooter = template.footer;
       campaign.templateButtons = components.buttons;
       await campaign.save();

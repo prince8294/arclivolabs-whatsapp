@@ -24,6 +24,8 @@ const messageTemplateSchema = new Schema(
     metaCategory: { type: String, required: true, default: "MARKETING" },
     language: { type: String, required: true, trim: true, maxlength: 20 },
     header: { type: String, default: "", trim: true, maxlength: 60 },
+    headerFormat: { type: String, enum: ["NONE", "TEXT", "IMAGE", "VIDEO", "DOCUMENT"], default: "NONE" },
+    headerMediaUrl: { type: String, default: "", maxlength: 5000 },
     body: { type: String, required: true, trim: true, maxlength: 1024 },
     footer: { type: String, default: "", trim: true, maxlength: 60 },
     buttons: { type: [buttonSchema], default: [] },

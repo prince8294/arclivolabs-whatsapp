@@ -12,6 +12,7 @@ import { normalizePhoneNumber } from "../lib/contacts/validation";
 import { evaluatePersonalizedRows, type PersonalizedPolicyContact, type PersonalizedPolicyRow } from "../lib/campaigns/personalized-policy";
 import { canDispatchRecipient, canStartCampaign } from "../lib/campaigns/dispatch-policy";
 import { buildTemplateSendComponents } from "../lib/campaigns/template-components";
+import { supportedTemplateComponents } from "../lib/campaigns/meta-templates";
 
 const originalAdminEmail = process.env.ADMIN_EMAIL;
 const originalAuthSecret = process.env.AUTH_SECRET;
@@ -340,6 +341,52 @@ test("approved template header, body, and dynamic URL button use only their decl
       parameters: [{ type: "text", text: "ref" }]
     }
   ]);
+});
+
+test("approved image-header template includes its Meta media URL in the send payload", () => {
+  assert.deepEqual(buildTemplateSendComponents({
+    header: "",
+    headerFormat: "IMAGE",
+    headerMediaUrl: "https://example.com/gym-offer.jpg",
+    body: "Hello {{1}}",
+    buttons: []
+  }, ["Peak Fitness"]), [
+    {
+      type: "header",
+      parameters: [{ type: "image", image: { link: "https://example.com/gym-offer.jpg" } }]
+    },
+    { type: "body", parameters: [{ type: "text", text: "Peak Fitness" }] }
+  ]);
+});
+
+test("approved Meta image-header template remains eligible for campaign selection", () => {
+  assert.deepEqual(supportedTemplateComponents([
+    {
+      type: "HEADER",
+      format: "IMAGE",
+      example: { header_handle: ["https://example.com/gym-offer.jpg"] }
+    },
+    { type: "BODY", text: "Hello {{1}}" },
+    {
+      type: "BUTTONS",
+      buttons: [
+        { type: "URL", text: "Visit website", url: "https://arclivolabs.com" },
+        { type: "QUICK_REPLY", text: "YES" },
+        { type: "QUICK_REPLY", text: "NO" }
+      ]
+    }
+  ]), {
+    body: "Hello {{1}}",
+    header: "",
+    headerFormat: "IMAGE",
+    headerMediaUrl: "https://example.com/gym-offer.jpg",
+    footer: "",
+    buttons: [
+      { type: "URL", text: "Visit website", url: "https://arclivolabs.com" },
+      { type: "QUICK_REPLY", text: "YES" },
+      { type: "QUICK_REPLY", text: "NO" }
+    ]
+  });
 });
 
 test("CSV upload-to-preview dry run produces eligible personalized rows without queue or Meta calls", () => {

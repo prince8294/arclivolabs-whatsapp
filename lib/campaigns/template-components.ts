@@ -1,5 +1,7 @@
 export type SendableTemplate = {
   header: string;
+  headerFormat?: "NONE" | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT" | string;
+  headerMediaUrl?: string;
   body: string;
   buttons: { type: "QUICK_REPLY" | "URL"; url?: string }[];
 };
@@ -12,7 +14,13 @@ function variableNumbers(value: string) {
 export function buildTemplateSendComponents(template: SendableTemplate, variables: string[]) {
   const components: Record<string, unknown>[] = [];
   const headerVariables = variableNumbers(template.header);
-  if (headerVariables.length) {
+  const mediaType = template.headerFormat?.toLowerCase();
+  if (["image", "video", "document"].includes(mediaType ?? "") && template.headerMediaUrl) {
+    components.push({
+      type: "header",
+      parameters: [{ type: mediaType, [mediaType!]: { link: template.headerMediaUrl } }]
+    });
+  } else if (headerVariables.length) {
     components.push({
       type: "header",
       parameters: headerVariables.map((number) => ({ type: "text", text: variables[number - 1] ?? "" }))

@@ -10,6 +10,8 @@ export type MetaTemplateRecord = {
   components?: unknown;
 };
 
+export type TemplateHeaderFormat = "NONE" | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -31,6 +33,8 @@ export function supportedTemplateComponents(value: unknown) {
   if (!Array.isArray(value)) return null;
   let body = "";
   let header = "";
+  let headerFormat: TemplateHeaderFormat = "NONE";
+  let headerMediaUrl = "";
   let footer = "";
   const buttons: { type: "QUICK_REPLY" | "URL"; text: string; url?: string }[] = [];
   for (const component of value) {
@@ -38,8 +42,23 @@ export function supportedTemplateComponents(value: unknown) {
     if (component.type === "BODY" && typeof component.text === "string") {
       body = component.text;
     } else if (component.type === "HEADER") {
-      if (component.format !== "TEXT" || typeof component.text !== "string") return null;
-      header = component.text;
+      if (component.format === "TEXT" && typeof component.text === "string") {
+        headerFormat = "TEXT";
+        header = component.text;
+      } else if (["IMAGE", "VIDEO", "DOCUMENT"].includes(String(component.format))) {
+        const example = isRecord(component.example) ? component.example : null;
+        const handles = example?.header_handle;
+        const mediaUrl = Array.isArray(handles) && typeof handles[0] === "string" ? handles[0] : "";
+        try {
+          if (!mediaUrl || new URL(mediaUrl).protocol !== "https:") return null;
+        } catch {
+          return null;
+        }
+        headerFormat = component.format as TemplateHeaderFormat;
+        headerMediaUrl = mediaUrl;
+      } else {
+        return null;
+      }
     } else if (component.type === "FOOTER" && typeof component.text === "string") {
       footer = component.text;
     } else if (component.type === "BUTTONS" && Array.isArray(component.buttons)) {
@@ -54,7 +73,7 @@ export function supportedTemplateComponents(value: unknown) {
       return null;
     }
   }
-  return body ? { body, header, footer, buttons } : null;
+  return body ? { body, header, headerFormat, headerMediaUrl, footer, buttons } : null;
 }
 
 export function extractComponentTemplateVariables(components: {

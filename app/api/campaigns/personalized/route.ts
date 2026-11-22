@@ -62,6 +62,8 @@ export async function POST(request: NextRequest) {
       templateCategory: "MARKETING",
       templateBody: inspected.template.body,
       templateHeader: inspected.template.header,
+      templateHeaderFormat: inspected.template.headerFormat,
+      templateHeaderMediaUrl: inspected.template.headerMediaUrl,
       templateFooter: inspected.template.footer,
       templateButtons: inspected.template.buttons,
       status: "Draft",

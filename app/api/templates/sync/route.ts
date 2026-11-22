@@ -21,11 +21,27 @@ function asRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseComponents(value: unknown) {
-  const result = { header: "", body: "", footer: "", buttons: [] as { type: "QUICK_REPLY" | "URL"; text: string; url?: string }[] };
+  const result = {
+    header: "",
+    headerFormat: "NONE" as "NONE" | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT",
+    headerMediaUrl: "",
+    body: "",
+    footer: "",
+    buttons: [] as { type: "QUICK_REPLY" | "URL"; text: string; url?: string }[]
+  };
   if (!Array.isArray(value)) return result;
   for (const component of value) {
     if (!asRecord(component)) continue;
-    if (component.type === "HEADER" && typeof component.text === "string") result.header = component.text;
+    if (component.type === "HEADER" && component.format === "TEXT" && typeof component.text === "string") {
+      result.header = component.text;
+      result.headerFormat = "TEXT";
+    }
+    if (component.type === "HEADER" && ["IMAGE", "VIDEO", "DOCUMENT"].includes(String(component.format))) {
+      result.headerFormat = component.format as "IMAGE" | "VIDEO" | "DOCUMENT";
+      const example = asRecord(component.example) ? component.example : null;
+      const handles = example?.header_handle;
+      if (Array.isArray(handles) && typeof handles[0] === "string") result.headerMediaUrl = handles[0];
+    }
     if (component.type === "BODY" && typeof component.text === "string") result.body = component.text;
     if (component.type === "FOOTER" && typeof component.text === "string") result.footer = component.text;
     if (component.type === "BUTTONS" && Array.isArray(component.buttons)) {
@@ -92,6 +108,8 @@ export async function POST(request: NextRequest) {
             metaTemplateId: record.id,
             isDraft: false,
             header: components.header,
+            headerFormat: components.headerFormat,
+            headerMediaUrl: components.headerMediaUrl,
             body,
             footer: components.footer,
             buttons: components.buttons,

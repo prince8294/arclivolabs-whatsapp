@@ -63,6 +63,7 @@ type Template = {
   language: string;
   body: string;
   header: string;
+  headerFormat: "NONE" | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT";
   footer: string;
   variables: number[];
   buttons: { type: "QUICK_REPLY" | "URL"; text: string; url?: string }[];

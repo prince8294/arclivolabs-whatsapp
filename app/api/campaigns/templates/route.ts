@@ -56,6 +56,7 @@ export async function GET(request: NextRequest) {
         metaStatus: status,
         body: components.body,
         header: components.header,
+        headerFormat: components.headerFormat,
         footer: components.footer,
         buttons: components.buttons,
         variables,
@@ -64,7 +65,20 @@ export async function GET(request: NextRequest) {
       });
       await MessageTemplate.updateOne(
         { _id: local._id },
-        { $set: { metaStatus: status, metaCategory: category, lastSyncedAt: new Date() } }
+        {
+          $set: {
+            metaStatus: status,
+            metaCategory: category,
+            body: components.body,
+            header: components.header,
+            headerFormat: components.headerFormat,
+            headerMediaUrl: components.headerMediaUrl,
+            footer: components.footer,
+            buttons: components.buttons,
+            variables,
+            lastSyncedAt: new Date()
+          }
+        }
       );
     }
     return NextResponse.json({ templates: choices });

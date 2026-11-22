@@ -152,7 +152,7 @@ export async function inspectPersonalizedRows(
           metaStatus: "APPROVED",
           metaCategory: "MARKETING",
           metaTemplateId: { $ne: "" }
-        }).select("name language body header footer buttons").lean()
+        }).select("name language body header headerFormat headerMediaUrl footer buttons").lean()
       : null,
     findRecordedRecipients(normalizedNumbers)
   ]);
@@ -162,6 +162,8 @@ export async function inspectPersonalizedRows(
     language: templateRecord.language,
     body: templateRecord.body,
     header: templateRecord.header,
+    headerFormat: templateRecord.headerFormat,
+    headerMediaUrl: templateRecord.headerMediaUrl,
     footer: templateRecord.footer,
     buttons: templateRecord.buttons.map((button) => ({
       type: button.type,

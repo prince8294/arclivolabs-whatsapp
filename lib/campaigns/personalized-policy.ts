@@ -32,6 +32,8 @@ export type PersonalizedPolicyTemplate = {
   language: string;
   body: string;
   header: string;
+  headerFormat?: "NONE" | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT";
+  headerMediaUrl?: string;
   footer: string;
   buttons: { type: "QUICK_REPLY" | "URL"; text: string; url?: string }[];
   variables: number[];

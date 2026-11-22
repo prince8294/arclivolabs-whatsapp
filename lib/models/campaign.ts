@@ -27,6 +27,8 @@ const campaignSchema = new Schema(
     templateCategory: { type: String, default: "", maxlength: 40 },
     templateBody: { type: String, default: "", maxlength: 1024 },
     templateHeader: { type: String, default: "", maxlength: 60 },
+    templateHeaderFormat: { type: String, enum: ["NONE", "TEXT", "IMAGE", "VIDEO", "DOCUMENT"], default: "NONE" },
+    templateHeaderMediaUrl: { type: String, default: "", maxlength: 5000 },
     templateFooter: { type: String, default: "", maxlength: 60 },
     templateButtons: { type: [Schema.Types.Mixed], default: [] },
     variableMappings: { type: [variableMappingSchema], default: [] },

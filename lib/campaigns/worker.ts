@@ -228,7 +228,13 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
 
   try {
     const { credentials } = await getEffectiveCredentials();
-    const components = buildTemplateSendComponents(template, recipient.templateVariables);
+    const components = buildTemplateSendComponents({
+      header: campaign.templateHeader || template.header,
+      headerFormat: campaign.templateHeaderFormat || template.headerFormat,
+      headerMediaUrl: campaign.templateHeaderMediaUrl || template.headerMediaUrl,
+      body: campaign.templateBody || template.body,
+      buttons: template.buttons
+    }, recipient.templateVariables);
     const requestBody = {
       messaging_product: "whatsapp",
       to: recipient.phoneNumber.replace(/^\+/, ""),
