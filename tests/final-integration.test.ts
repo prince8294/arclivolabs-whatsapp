@@ -243,16 +243,17 @@ test("a row in a different category is never eligible for the selected campaign"
   assert.equal(rows[0].eligibilityStatus, "Wrong Category");
 });
 
-test("invalid numbers and CSV-only consent claims are excluded", () => {
+test("invalid numbers are excluded while valid uploaded rows do not require consent fields", () => {
   const rows = evaluateRows([
     policyRow("not a phone", { consentStatus: "Opted In", consentSource: "Website", consentDate: "2026-01-01" }),
     policyRow("+919876543210", { row: 3, consentStatus: "Opted In", consentSource: "Website", consentDate: "2026-01-01" })
   ], new Map()).rows;
   assert.equal(rows[0].eligibilityStatus, "Invalid Number");
-  assert.equal(rows[1].eligibilityStatus, "Missing Consent");
+  assert.equal(rows[1].eligibilityStatus, "Ready to Send");
+  assert.equal(rows[1].eligible, true);
 });
 
-test("a recipient opting out after preview fails current eligibility", () => {
+test("a recipient added to the suppression list before send is excluded", () => {
   const phone = "+919876543210";
   const row = policyRow(phone);
   const before = evaluateRows([row], new Map([[phone, consentContact(phone)]]));
@@ -264,7 +265,7 @@ test("a recipient opting out after preview fails current eligibility", () => {
     new Set([phone])
   );
   assert.equal(after.rows[0].eligible, false);
-  assert.equal(after.rows[0].eligibilityStatus, "Opted Out");
+  assert.equal(after.rows[0].eligibilityStatus, "Suppressed");
 });
 
 test("a stored Do Not Contact flag excludes an otherwise opted-in contact", () => {

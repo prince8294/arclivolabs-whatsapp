@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, Mail, MapPin, Pencil, Phone, ShieldCheck, ShieldOff, Trash2, UserRound, X } from "lucide-react";
+import { Mail, MapPin, Pencil, Phone, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
 import type { ContactRecord } from "@/components/contacts/types";
 import { getContactCategoryName } from "@/components/contacts/types";
 
@@ -9,8 +9,6 @@ type Props = {
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
-  onConsent: () => void;
-  onDoNotContact: () => void;
 };
 
 function formatDate(value?: string | null) {
@@ -19,7 +17,7 @@ function formatDate(value?: string | null) {
   return Number.isNaN(date.getTime()) ? "Not recorded" : date.toLocaleString();
 }
 
-export function ContactDetailsPanel({ contact, onClose, onEdit, onDelete, onConsent, onDoNotContact }: Props) {
+export function ContactDetailsPanel({ contact, onClose, onEdit, onDelete }: Props) {
   const details = [
     { label: "Contact person", value: contact.contactPerson || "Not provided", icon: UserRound },
     { label: "WhatsApp number", value: contact.phoneNumber, icon: Phone },
@@ -46,12 +44,6 @@ export function ContactDetailsPanel({ contact, onClose, onEdit, onDelete, onCons
           <button onClick={onEdit} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl border border-[var(--border)] text-xs font-semibold hover:bg-[var(--surface-muted)]">
             <Pencil size={14} /> Edit
           </button>
-          <button onClick={onConsent} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--accent-soft)] text-xs font-semibold text-[var(--accent)] hover:opacity-80">
-            <ShieldCheck size={14} /> Manage consent
-          </button>
-          <button onClick={onDoNotContact} aria-label={contact.doNotContact ? "Remove Do Not Contact flag" : "Mark Do Not Contact"} title={contact.doNotContact ? "Remove Do Not Contact" : "Mark Do Not Contact"} className="flex h-9 w-10 items-center justify-center rounded-xl border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-muted)]">
-            {contact.doNotContact ? <ShieldOff size={15} /> : <ShieldCheck size={15} />}
-          </button>
           <button onClick={onDelete} aria-label="Delete contact" className="flex h-9 w-10 items-center justify-center rounded-xl border border-red-500/20 text-red-600 hover:bg-red-500/10 dark:text-red-400">
             <Trash2 size={15} />
           </button>
@@ -69,41 +61,12 @@ export function ContactDetailsPanel({ contact, onClose, onEdit, onDelete, onCons
             ))}
           </section>
 
-          <section className="border-t border-[var(--border)] pt-5">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">Marketing consent</p>
-            {contact.doNotContact && <p className="mt-2 rounded-lg bg-red-500/10 px-3 py-2 text-[10px] font-semibold text-red-700 dark:text-red-300">Do Not Contact — campaign messages are blocked.</p>}
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <span className="text-xs font-semibold">{contact.marketingConsentStatus}</span>
-              <span className={`rounded-full px-2.5 py-1 text-[9px] font-semibold ${
-                contact.marketingConsentStatus === "Opted In"
-                  ? "bg-[var(--accent-soft)] text-[var(--accent)]"
-                  : contact.marketingConsentStatus === "Opted Out"
-                    ? "bg-red-500/10 text-red-600 dark:text-red-400"
-                    : "bg-[var(--surface-muted)] text-[var(--muted)]"
-              }`}>
-                {contact.marketingConsentStatus === "Opted In" ? "Permission recorded" : contact.marketingConsentStatus === "Opted Out" ? "Do not message" : "Not confirmed"}
-              </span>
+          {!!contact.campaignNames?.length && <section className="border-t border-[var(--border)] pt-5">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">Campaigns</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {contact.campaignNames.map((campaignName) => <span key={campaignName} className="rounded-full bg-[var(--accent-soft)] px-2.5 py-1 text-[10px] font-semibold text-[var(--accent)]">{campaignName}</span>)}
             </div>
-            <div className="mt-3 space-y-2 text-[11px]">
-              <p><span className="text-[var(--muted)]">Source:</span> {contact.consentSource || "Not recorded"}</p>
-              <p><span className="text-[var(--muted)]">Date:</span> {formatDate(contact.consentTimestamp)}</p>
-            </div>
-            {!!contact.consentHistory?.length && (
-              <div className="mt-4 border-t border-[var(--border)] pt-3">
-                <p className="mb-2 text-[10px] font-medium text-[var(--muted)]">Consent history</p>
-                <div className="space-y-2.5">
-                  {contact.consentHistory.slice().reverse().map((entry, index) => (
-                    <div key={`${entry.timestamp}-${index}`} className="flex items-start gap-2">
-                      <CalendarDays size={13} className="mt-0.5 shrink-0 text-[var(--muted)]" />
-                      <p className="text-[10px] leading-4">
-                        <span className="font-semibold">{entry.status}</span> · {entry.source} · {formatDate(entry.timestamp)}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </section>
+          </section>}
 
           {contact.notes && (
             <section className="border-t border-[var(--border)] pt-5">

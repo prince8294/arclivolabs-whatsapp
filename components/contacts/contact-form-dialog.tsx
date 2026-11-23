@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { AlertCircle, LoaderCircle, X } from "lucide-react";
-import type { CategoryOption, ContactRecord, ContactConsentStatus } from "@/components/contacts/types";
+import type { CategoryOption, ContactRecord } from "@/components/contacts/types";
 import { getApiError, getContactCategoryId } from "@/components/contacts/types";
 
 type Props = {
@@ -11,14 +11,6 @@ type Props = {
   onClose: () => void;
   onSaved: (contact: ContactRecord) => void;
 };
-
-function localDateTime(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-}
 
 export function ContactFormDialog({ categories, contact, onClose, onSaved }: Props) {
   const [businessName, setBusinessName] = useState(contact?.businessName ?? "");
@@ -29,12 +21,6 @@ export function ContactFormDialog({ categories, contact, onClose, onSaved }: Pro
   const [state, setState] = useState(contact?.state ?? "");
   const [email, setEmail] = useState(contact?.email ?? "");
   const [notes, setNotes] = useState(contact?.notes ?? "");
-  const [consentStatus, setConsentStatus] = useState<ContactConsentStatus>(
-    contact?.marketingConsentStatus ?? "Unknown"
-  );
-  const [consentSource, setConsentSource] = useState(contact?.consentSource ?? "");
-  const [consentTimestamp, setConsentTimestamp] = useState(localDateTime(contact?.consentTimestamp));
-  const [permissionDocumented, setPermissionDocumented] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -53,13 +39,6 @@ export function ContactFormDialog({ categories, contact, onClose, onSaved }: Pro
         email,
         notes
       };
-      if (!contact) {
-        payload.marketingConsentStatus = consentStatus;
-        payload.consentSource = consentSource;
-        payload.consentTimestamp = consentTimestamp ? new Date(consentTimestamp).toISOString() : "";
-        payload.permissionDocumented = permissionDocumented;
-      }
-
       const response = await fetch(contact ? `/api/contacts/${contact._id}` : "/api/contacts", {
         method: contact ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
@@ -85,7 +64,7 @@ export function ContactFormDialog({ categories, contact, onClose, onSaved }: Pro
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 id="contact-form-title" className="text-base font-semibold">{contact ? "Edit contact" : "Add contact"}</h2>
-            <p className="mt-1 text-[11px] text-[var(--muted)]">Keep business contact details accurate and consent-based.</p>
+            <p className="mt-1 text-[11px] text-[var(--muted)]">Keep business contact details accurate and organized.</p>
           </div>
           <button type="button" onClick={onClose} disabled={saving} aria-label="Close dialog" className="rounded-lg p-1.5 text-[var(--muted)] hover:bg-[var(--surface-muted)]">
             <X size={17} />
@@ -131,51 +110,6 @@ export function ContactFormDialog({ categories, contact, onClose, onSaved }: Pro
               <textarea rows={2} maxLength={2000} value={notes} onChange={(event) => setNotes(event.target.value)} className="w-full resize-none rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 py-2.5 text-xs outline-none transition focus:border-[var(--accent)]" placeholder="Optional notes about this contact" />
             </label>
           </div>
-
-          {!contact && (
-            <section className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-3.5">
-              <h3 className="text-[11px] font-semibold">Marketing consent</h3>
-              <p className="mt-1 text-[10px] leading-4 text-[var(--muted)]">New contacts default to Unknown. Opt in only when permission is documented.</p>
-              <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                <label className="block sm:col-span-1">
-                  <span className="mb-1.5 block text-[10px] font-medium">Consent status</span>
-                  <select
-                    value={consentStatus}
-                    onChange={(event) => {
-                      const status = event.target.value as ContactConsentStatus;
-                      setConsentStatus(status);
-                      if (status === "Unknown") {
-                        setConsentSource("");
-                        setConsentTimestamp("");
-                        setPermissionDocumented(false);
-                      }
-                    }}
-                    className={inputClass()}
-                  >
-                    <option>Unknown</option><option>Opted In</option><option>Opted Out</option>
-                  </select>
-                </label>
-                {consentStatus !== "Unknown" && (
-                  <>
-                    <label className="block sm:col-span-1">
-                      <span className="mb-1.5 block text-[10px] font-medium">Consent source <span className="text-red-500">*</span></span>
-                      <input required maxLength={120} value={consentSource} onChange={(event) => setConsentSource(event.target.value)} className={inputClass()} placeholder="e.g. Signed form" />
-                    </label>
-                    <label className="block sm:col-span-1">
-                      <span className="mb-1.5 block text-[10px] font-medium">Consent date <span className="text-red-500">*</span></span>
-                      <input required type="datetime-local" value={consentTimestamp} onChange={(event) => setConsentTimestamp(event.target.value)} className={inputClass()} />
-                    </label>
-                  </>
-                )}
-              </div>
-              {consentStatus === "Opted In" && (
-                <label className="mt-3 flex items-start gap-2 text-[10px] leading-4 text-[var(--muted)]">
-                  <input type="checkbox" checked={permissionDocumented} onChange={(event) => setPermissionDocumented(event.target.checked)} className="mt-0.5 accent-[#128c50]" />
-                  <span>I have verified that documented permission exists for this contact.</span>
-                </label>
-              )}
-            </section>
-          )}
 
           {error && <p role="alert" className="flex items-start gap-2 rounded-xl bg-red-500/10 px-3 py-2.5 text-[11px] leading-4 text-red-600 dark:text-red-400"><AlertCircle size={14} className="mt-0.5 shrink-0" />{error}</p>}
           <div className="flex justify-end gap-2 border-t border-[var(--border)] pt-4">

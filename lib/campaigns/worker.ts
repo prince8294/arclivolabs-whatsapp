@@ -118,7 +118,7 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
     return;
   }
   const contact = recipient.contactId ? await Contact.findById(recipient.contactId)
-    .select("phoneNumber categoryId marketingConsentStatus consentSource consentTimestamp doNotContact")
+    .select("phoneNumber categoryId doNotContact")
     .lean() : null;
   const currentPhone = contact ? normalizePhoneNumber(contact.phoneNumber) : null;
   const categoryMatches = Boolean(contact && campaign.categoryIds.some((categoryId) => categoryId.equals(contact.categoryId)));
@@ -126,23 +126,17 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
     await failRecipient(recipientId, "WRONG_CATEGORY", "Contact no longer belongs to the campaign's selected category.", "excluded");
     return;
   }
-  const timestamp = contact?.consentTimestamp;
-  const consentValid = Boolean(
+  const contactActive = Boolean(
     contact &&
     !contact.doNotContact &&
-    contact.marketingConsentStatus === "Opted In" &&
-    contact.consentSource?.trim() &&
-    timestamp instanceof Date &&
-    !Number.isNaN(timestamp.getTime()) &&
-    timestamp.getTime() <= Date.now() &&
     currentPhone === recipient.phoneNumber
   );
   const isSuppressed = await MessageSuppression.exists({ phoneNumber: recipient.phoneNumber });
-  if (!consentValid || isSuppressed) {
+  if (!contactActive || isSuppressed) {
     await failRecipient(
       recipientId,
-      isSuppressed ? "SUPPRESSED" : "CONSENT_REVOKED",
-      isSuppressed ? "Contact is on the suppression list." : "Contact no longer has current documented consent.",
+      isSuppressed ? "SUPPRESSED" : "CONTACT_UNAVAILABLE",
+      isSuppressed ? "Contact is on the suppression list." : "Contact is unavailable or marked Do Not Contact.",
       "excluded"
     );
     return;
@@ -184,17 +178,13 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
 
   const beforeSend = await Campaign.findById(campaignId).select("status").lean();
   const latestContact = recipient.contactId ? await Contact.findById(recipient.contactId)
-    .select("phoneNumber categoryId marketingConsentStatus consentSource consentTimestamp doNotContact")
+    .select("phoneNumber categoryId doNotContact")
     .lean() : null;
   const latestPhone = latestContact ? normalizePhoneNumber(latestContact.phoneNumber) : null;
   const latestSuppression = await MessageSuppression.exists({ phoneNumber: recipient.phoneNumber });
-  const latestConsent = Boolean(
+  const latestContactActive = Boolean(
     latestContact &&
     !latestContact.doNotContact &&
-    latestContact.marketingConsentStatus === "Opted In" &&
-    latestContact.consentSource?.trim() &&
-    latestContact.consentTimestamp instanceof Date &&
-    latestContact.consentTimestamp.getTime() <= Date.now() &&
     latestPhone === recipient.phoneNumber
   );
   if (beforeSend?.status === "Paused") {
@@ -212,8 +202,8 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
     await failRecipient(recipientId, "WRONG_CATEGORY", "Contact no longer belongs to the campaign's selected category.", "excluded");
     return;
   }
-  if (!latestConsent || latestSuppression) {
-    await failRecipient(recipientId, latestSuppression ? "SUPPRESSED" : "CONSENT_REVOKED", "Contact eligibility changed before sending.", "excluded");
+  if (!latestContactActive || latestSuppression) {
+    await failRecipient(recipientId, latestSuppression ? "SUPPRESSED" : "CONTACT_UNAVAILABLE", "Contact eligibility changed before sending.", "excluded");
     return;
   }
   const currentReservation = await CampaignRecipientReservation.exists({

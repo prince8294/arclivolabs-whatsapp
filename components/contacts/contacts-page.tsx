@@ -14,16 +14,14 @@ import {
   Pencil,
   Plus,
   Search,
-  ShieldCheck,
   Trash2,
   UserRound,
   X
 } from "lucide-react";
 import { ContactFormDialog } from "@/components/contacts/contact-form-dialog";
 import { ContactDetailsPanel } from "@/components/contacts/contact-details-panel";
-import { ConsentDialog } from "@/components/contacts/consent-dialog";
 import { ImportWizard } from "@/components/contacts/import-wizard";
-import { getApiError, getContactCategoryName, type CategoryOption, type ContactRecord, type ContactConsentStatus } from "@/components/contacts/types";
+import { getApiError, getContactCategoryName, type CategoryOption, type ContactRecord } from "@/components/contacts/types";
 
 type ContactStats = {
   totalContacts: number;
@@ -53,7 +51,6 @@ export function ContactsPage() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [cityFilter, setCityFilter] = useState("");
-  const [consentFilter, setConsentFilter] = useState<ContactConsentStatus | "">("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -62,7 +59,6 @@ export function ContactsPage() {
   const [editing, setEditing] = useState<ContactRecord | null>(null);
   const [details, setDetails] = useState<ContactRecord | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
-  const [consentContact, setConsentContact] = useState<ContactRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -73,9 +69,8 @@ export function ContactsPage() {
     if (search.trim()) params.set("search", search.trim());
     if (categoryFilter) params.set("categoryId", categoryFilter);
     if (cityFilter) params.set("city", cityFilter);
-    if (consentFilter) params.set("consent", consentFilter);
     return params.toString();
-  }, [page, pageSize, search, categoryFilter, cityFilter, consentFilter]);
+  }, [page, pageSize, search, categoryFilter, cityFilter]);
 
   const loadContacts = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -167,30 +162,6 @@ export function ContactsPage() {
     await loadContacts();
   }
 
-  async function savedConsent(contact: ContactRecord) {
-    setConsentContact(null);
-    setDetails(contact);
-    setNotice({ type: "success", message: "Marketing consent updated and recorded." });
-    await loadContacts();
-  }
-
-  async function toggleDoNotContact(contact: ContactRecord) {
-    try {
-      const response = await fetch(`/api/contacts/${contact._id}/consent`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doNotContact: !contact.doNotContact })
-      });
-      if (!response.ok) throw new Error(await getApiError(response));
-      const result = await response.json() as { contact: ContactRecord };
-      setDetails(result.contact);
-      setNotice({ type: "success", message: result.contact.doNotContact ? "Do Not Contact flag enabled." : "Do Not Contact flag removed." });
-      await loadContacts();
-    } catch (error) {
-      setNotice({ type: "error", message: error instanceof Error ? error.message : "Do Not Contact status could not be updated." });
-    }
-  }
-
   async function confirmDelete() {
     if (!deleteTarget) return;
     setDeleting(true);
@@ -231,9 +202,7 @@ export function ContactsPage() {
 
   const metricCards = [
     { title: "Total contacts", value: stats.totalContacts, hint: "Saved in your workspace", icon: ContactRound },
-    { title: "Categories with contacts", value: stats.categoriesWithContacts, hint: "Categories currently in use", icon: MapPin },
-    { title: "Marketing opted-in", value: stats.optedIn, hint: "Documented permission recorded", icon: ShieldCheck },
-    { title: "Opted out", value: stats.optedOut, hint: "Do not message", icon: X }
+    { title: "Categories with contacts", value: stats.categoriesWithContacts, hint: "Categories currently in use", icon: MapPin }
   ];
 
   if (unauthorized) {
@@ -265,7 +234,7 @@ export function ContactsPage() {
         </div>
       </section>
 
-      <section aria-label="Contact statistics" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+      <section aria-label="Contact statistics" className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
         {metricCards.map(({ title, value, hint, icon: Icon }) => (
           <article key={title} className="surface soft-shadow rounded-2xl p-4 sm:p-5">
             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]"><Icon size={17} /></span>
@@ -290,9 +259,6 @@ export function ContactsPage() {
             <select aria-label="Filter by city" value={cityFilter} onChange={(event) => { setCityFilter(event.target.value); setPage(1); }} className="h-9 min-w-[120px] rounded-xl border border-[var(--border)] bg-[var(--background)] px-2.5 text-[11px] outline-none focus:border-[var(--accent)]">
               <option value="">All Cities</option>
               {cities.map((city) => <option key={city} value={city}>{city}</option>)}
-            </select>
-            <select aria-label="Filter by marketing consent" value={consentFilter} onChange={(event) => { setConsentFilter(event.target.value as ContactConsentStatus | ""); setPage(1); }} className="h-9 min-w-[130px] rounded-xl border border-[var(--border)] bg-[var(--background)] px-2.5 text-[11px] outline-none focus:border-[var(--accent)]">
-              <option value="">All Consent</option><option>Opted In</option><option>Unknown</option><option>Opted Out</option>
             </select>
             <select aria-label="Contacts per page" value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }} className="h-9 rounded-xl border border-[var(--border)] bg-[var(--background)] px-2.5 text-[11px] outline-none focus:border-[var(--accent)]">
               <option value={20}>20 / page</option><option value={50}>50 / page</option>
@@ -341,7 +307,7 @@ export function ContactsPage() {
                   <th className="px-3 py-3">WhatsApp number</th>
                   <th className="px-3 py-3">Category</th>
                   <th className="px-3 py-3">City</th>
-                  <th className="px-3 py-3">Marketing consent</th>
+                  <th className="px-3 py-3">Campaign</th>
                   <th className="px-3 py-3">Created date</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
@@ -357,15 +323,7 @@ export function ContactsPage() {
                     <td className="whitespace-nowrap px-3 py-3">{contact.phoneNumber}</td>
                     <td className="max-w-[180px] truncate px-3 py-3">{getContactCategoryName(contact)}</td>
                     <td className="px-3 py-3">{contact.city || "—"}</td>
-                    <td className="px-3 py-3">
-                      <span className={`inline-flex rounded-full px-2 py-1 text-[9px] font-semibold ${
-                        contact.marketingConsentStatus === "Opted In"
-                          ? "bg-[var(--accent-soft)] text-[var(--accent)]"
-                          : contact.marketingConsentStatus === "Opted Out"
-                            ? "bg-red-500/10 text-red-600 dark:text-red-400"
-                            : "bg-[var(--surface-muted)] text-[var(--muted)]"
-                      }`}>{contact.marketingConsentStatus}</span>
-                    </td>
+                    <td className="max-w-[220px] px-3 py-3"><span className="block truncate" title={contact.campaignNames?.join(", ")}>{contact.campaignNames?.length ? contact.campaignNames.join(", ") : "—"}</span></td>
                     <td className="whitespace-nowrap px-3 py-3 text-[var(--muted)]">{formatDate(contact.createdAt)}</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-0.5">
@@ -409,12 +367,9 @@ export function ContactsPage() {
           onClose={() => setDetails(null)}
           onEdit={() => startEdit(details)}
           onDelete={() => setDeleteTarget({ type: "single", contact: details })}
-          onConsent={() => setConsentContact(details)}
-          onDoNotContact={() => void toggleDoNotContact(details)}
         />
       )}
       {formOpen && <ContactFormDialog categories={categories} contact={editing} onClose={() => { setFormOpen(false); setEditing(null); }} onSaved={(contact) => void savedContact(contact)} />}
-      {consentContact && <ConsentDialog contact={consentContact} onClose={() => setConsentContact(null)} onSaved={(contact) => void savedConsent(contact)} />}
       {importOpen && <ImportWizard categories={categories} onClose={() => setImportOpen(false)} onImported={async (message) => { setImportOpen(false); setNotice({ type: "success", message }); await loadContacts(); }} />}
 
       {deleteTarget && (

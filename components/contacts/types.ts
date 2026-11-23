@@ -12,6 +12,8 @@ export type ContactRecord = {
   state: string;
   email: string;
   notes?: string;
+  campaignIds?: string[];
+  campaignNames?: string[];
   marketingConsentStatus: ContactConsentStatus;
   consentSource?: string;
   consentTimestamp?: string | null;

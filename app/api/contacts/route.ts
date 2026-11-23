@@ -4,11 +4,10 @@ import { contactServerError, duplicatePhoneResponse } from "@/lib/api/contact-er
 import { rateLimit } from "@/lib/api/rate-limit";
 import { isAdminSessionValid, isSameOriginRequest } from "@/lib/auth/admin-session";
 import { connectToDatabase } from "@/lib/db/mongodb";
-import { marketingConsentStatuses, validateConsentInput, validateContactProfile } from "@/lib/contacts/validation";
+import { marketingConsentStatuses, validateContactProfile } from "@/lib/contacts/validation";
 import { getContactStats } from "@/lib/data/contact-stats";
 import Category from "@/lib/models/category";
 import Contact from "@/lib/models/contact";
-import MessageSuppression from "@/lib/models/message-suppression";
 
 function unauthorized() {
   return NextResponse.json({ error: { code: "UNAUTHORIZED", message: "Admin sign-in is required." } }, { status: 401 });
@@ -102,41 +101,13 @@ export async function POST(request: NextRequest) {
   if (!profile.ok) {
     return NextResponse.json({ error: { code: "INVALID_CONTACT", message: profile.message } }, { status: 400 });
   }
-  const consent = validateConsentInput(body as Record<string, unknown>);
-  if (!consent.ok) {
-    return NextResponse.json({ error: { code: "INVALID_CONSENT", message: consent.message } }, { status: 400 });
-  }
-  if (consent.value.status === "Opted In" && (body as Record<string, unknown>).permissionDocumented !== true) {
-    return NextResponse.json(
-      { error: { code: "DOCUMENTATION_REQUIRED", message: "Confirm documented permission before opting in this contact." } },
-      { status: 400 }
-    );
-  }
-
   try {
     await connectToDatabase();
     if (!(await Category.exists({ _id: profile.value.categoryId }))) {
       return NextResponse.json({ error: { code: "CATEGORY_NOT_FOUND", message: "Selected category was not found." } }, { status: 400 });
     }
 
-    const entry =
-      consent.value.status === "Unknown"
-        ? []
-        : [{ status: consent.value.status, source: consent.value.source, timestamp: consent.value.timestamp! }];
-    const contact = await Contact.create({
-      ...profile.value,
-      marketingConsentStatus: consent.value.status,
-      consentSource: consent.value.source,
-      consentTimestamp: consent.value.timestamp,
-      consentHistory: entry
-    });
-    if (consent.value.status === "Opted Out") {
-      await MessageSuppression.updateOne(
-        { phoneNumber: profile.value.phoneNumber },
-        { $set: { contactId: contact._id, reason: "Opted Out", source: consent.value.source, suppressedAt: consent.value.timestamp } },
-        { upsert: true }
-      );
-    }
+    const contact = await Contact.create(profile.value);
     await contact.populate("categoryId", "name icon");
     return NextResponse.json({ contact }, { status: 201 });
   } catch (error) {

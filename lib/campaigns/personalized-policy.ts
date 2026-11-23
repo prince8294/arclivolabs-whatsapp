@@ -61,17 +61,6 @@ function normalizedName(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function documentedConsent(contact: PersonalizedPolicyContact | undefined, now: number) {
-  return Boolean(
-    contact &&
-    contact.marketingConsentStatus === "Opted In" &&
-    contact.consentSource?.trim() &&
-    contact.consentTimestamp instanceof Date &&
-    !Number.isNaN(contact.consentTimestamp.getTime()) &&
-    contact.consentTimestamp.getTime() <= now
-  );
-}
-
 export function renderApprovedTemplate(body: string, variables: string[]) {
   return body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, number: string) => variables[Number(number) - 1] ?? "");
 }
@@ -83,7 +72,7 @@ export function evaluatePersonalizedRows(
   contactsByPhone: Map<string, PersonalizedPolicyContact>,
   suppressions: Set<string>,
   recorded: Map<string, RecordedRecipient>,
-  now = Date.now()
+  _now = Date.now()
 ) {
   const seen = new Map<string, number>();
   const inspected: InspectedPolicyRow[] = [];
@@ -98,7 +87,6 @@ export function evaluatePersonalizedRows(
     const duplicateRow = phone ? seen.get(phone) : undefined;
     const duplicate = duplicateRow !== undefined;
     const prior = phone ? recorded.get(phone) : undefined;
-    const consent = documentedConsent(existing, now);
     const variables = [
       row.businessName.trim(),
       row.recommendedSolution.trim(),
@@ -140,16 +128,11 @@ export function evaluatePersonalizedRows(
     } else if (!rowCategoryMatches || (existing && !existingCategoryMatches)) {
       eligibilityStatus = "Wrong Category";
       exclusionReason = `This row must belong to the selected ${category.name} category.`;
-    } else if (!existing || !consent) {
-      eligibilityStatus = existing?.marketingConsentStatus === "Opted Out" ? "Opted Out" : "Missing Consent";
-      exclusionReason = existing
-        ? "Stored, current, documented marketing opt-in is required; CSV consent claims are not accepted."
-        : "A matching CRM contact with stored, documented marketing opt-in is required.";
-    } else if (existing.doNotContact || suppressions.has(phone)) {
-      eligibilityStatus = existing.doNotContact ? "Suppressed" : existing.marketingConsentStatus === "Opted Out" ? "Opted Out" : "Suppressed";
-      exclusionReason = existing.doNotContact
+    } else if (existing?.doNotContact || suppressions.has(phone)) {
+      eligibilityStatus = "Suppressed";
+      exclusionReason = existing?.doNotContact
         ? "This CRM contact is marked Do Not Contact."
-        : "This number is opted out or on the permanent suppression list.";
+        : "This number is on the permanent suppression list.";
     } else if (!template) {
       eligibilityStatus = "Excluded";
       exclusionReason = "Choose a currently approved Meta marketing template.";

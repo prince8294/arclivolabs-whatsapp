@@ -9,6 +9,8 @@ import { refreshCampaignCounts } from "@/lib/campaigns/counts";
 import Campaign from "@/lib/models/campaign";
 import CampaignRecipient from "@/lib/models/campaign-recipient";
 import CampaignRecipientReservation from "@/lib/models/campaign-recipient-reservation";
+import Contact from "@/lib/models/contact";
+import { normalizePhoneNumber } from "@/lib/contacts/validation";
 
 export async function POST(request: NextRequest) {
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: { code: "FORBIDDEN", message: "Request origin is not allowed." } }, { status: 403 });
@@ -29,7 +31,12 @@ export async function POST(request: NextRequest) {
 
   try {
     await connectToDatabase();
-    const inspected = await inspectPersonalizedRows(
+    const categoryId = new Types.ObjectId(input.categoryId);
+    const generatedName = `Bulk campaign ${new Date().toISOString().slice(0, 10)}`;
+    const name = typeof input.name === "string" && input.name.trim()
+      ? input.name.trim().slice(0, 120)
+      : generatedName;
+    let inspected = await inspectPersonalizedRows(
       parsed.rows,
       "approved_template",
       typeof input.templateId === "string" ? input.templateId : "",
@@ -38,16 +45,43 @@ export async function POST(request: NextRequest) {
     if (!inspected.template) {
       return NextResponse.json({ error: { code: "TEMPLATE_NOT_APPROVED", message: "Choose a currently approved Meta marketing template." } }, { status: 400 });
     }
-    if (!inspected.rows.some((row) => row.eligible)) {
-      return NextResponse.json({ error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "No rows currently meet the category, consent, template, and duplicate checks." } }, { status: 400 });
+    const contactsByPhone = new Map<string, (typeof parsed.rows)[number]>();
+    for (const row of parsed.rows) {
+      const phoneNumber = normalizePhoneNumber(row.phoneNumber);
+      if (phoneNumber && !contactsByPhone.has(phoneNumber)) contactsByPhone.set(phoneNumber, row);
     }
+    const contactRows = [...contactsByPhone.entries()];
+    if (contactRows.length) {
+      await Contact.bulkWrite(contactRows.map(([phoneNumber, row]) => ({
+        updateOne: {
+          filter: { phoneNumber },
+          update: {
+            $set: {
+              businessName: row.businessName.trim() || phoneNumber,
+              categoryId,
+              ...(row.city.trim() ? { city: row.city.trim() } : {})
+            },
+            $setOnInsert: { phoneNumber }
+          },
+          upsert: true
+        }
+      })), { ordered: false });
+      inspected = await inspectPersonalizedRows(
+        parsed.rows,
+        "approved_template",
+        typeof input.templateId === "string" ? input.templateId : "",
+        input.categoryId
+      );
+    }
+    if (!inspected.rows.some((row) => row.eligible)) {
+      return NextResponse.json({ error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "Contacts were imported, but no row has a valid number and all required template values." } }, { status: 400 });
+    }
+    if (!inspected.template) {
+      return NextResponse.json({ error: { code: "TEMPLATE_NOT_APPROVED", message: "The selected template is no longer available." } }, { status: 409 });
+    }
+    const template = inspected.template;
 
-    const categoryId = new Types.ObjectId(input.categoryId);
     const importBatchId = randomUUID();
-    const generatedName = `${inspected.rows[0]?.categoryName || "Bulk"} campaign ${new Date().toISOString().slice(0, 10)}`;
-    const name = typeof input.name === "string" && input.name.trim()
-      ? input.name.trim().slice(0, 120)
-      : generatedName.slice(0, 120);
     const description = typeof input.description === "string" ? input.description.trim().slice(0, 1000) : "";
     const campaign = await Campaign.create({
       name,
@@ -56,16 +90,16 @@ export async function POST(request: NextRequest) {
       messageMode: "approved_template",
       categoryIds: [categoryId],
       cities: [...new Set(inspected.rows.map((row) => row.city).filter(Boolean))],
-      templateId: inspected.template._id,
-      templateName: inspected.template.name,
-      templateLanguage: inspected.template.language,
+      templateId: template._id,
+      templateName: template.name,
+      templateLanguage: template.language,
       templateCategory: "MARKETING",
-      templateBody: inspected.template.body,
-      templateHeader: inspected.template.header,
-      templateHeaderFormat: inspected.template.headerFormat,
-      templateHeaderMediaUrl: inspected.template.headerMediaUrl,
-      templateFooter: inspected.template.footer,
-      templateButtons: inspected.template.buttons,
+      templateBody: template.body,
+      templateHeader: template.header,
+      templateHeaderFormat: template.headerFormat,
+      templateHeaderMediaUrl: template.headerMediaUrl,
+      templateFooter: template.footer,
+      templateButtons: template.buttons,
       status: "Draft",
       dispatchStatus: "completed"
     });
@@ -134,10 +168,15 @@ export async function POST(request: NextRequest) {
         }];
       });
       if (recipientDocuments.length) await CampaignRecipient.insertMany(recipientDocuments, { ordered: true });
+      await Contact.updateMany(
+        { phoneNumber: { $in: contactRows.map(([phoneNumber]) => phoneNumber) } },
+        { $addToSet: { campaignIds: campaign._id, campaignNames: campaign.name } }
+      );
       await refreshCampaignCounts(String(campaign._id));
       return NextResponse.json({
         campaignId: String(campaign._id),
         importBatchId,
+        contactsImported: contactRows.length,
         eligible: claimed.length,
         excluded: inspected.summary.excludedContacts + (inspected.summary.eligibleContacts - claimed.length),
         summary: {
@@ -156,6 +195,6 @@ export async function POST(request: NextRequest) {
     }
   } catch (error) {
     console.error("Approved-template campaign import failed.", error);
-    return NextResponse.json({ error: { code: "PERSONALIZED_IMPORT_FAILED", message: "The reviewed campaign could not be saved." } }, { status: 500 });
+    return NextResponse.json({ error: { code: "PERSONALIZED_IMPORT_FAILED", message: "The campaign could not be created." } }, { status: 500 });
   }
 }

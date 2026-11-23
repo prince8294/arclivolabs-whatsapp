@@ -20,6 +20,8 @@ const contactSchema = new Schema(
     state: { type: String, default: "", trim: true, maxlength: 100 },
     email: { type: String, default: "", trim: true, lowercase: true, maxlength: 254 },
     notes: { type: String, default: "", trim: true, maxlength: 2000 },
+    campaignIds: { type: [Schema.Types.ObjectId], ref: "Campaign", default: [] },
+    campaignNames: { type: [String], default: [] },
     marketingConsentStatus: {
       type: String,
       enum: [...marketingConsentStatuses],
@@ -36,6 +38,7 @@ const contactSchema = new Schema(
 
 contactSchema.index({ categoryId: 1, city: 1 });
 contactSchema.index({ createdAt: -1 });
+contactSchema.index({ campaignIds: 1 });
 
 export type ContactDocument = InferSchemaType<typeof contactSchema>;
 
