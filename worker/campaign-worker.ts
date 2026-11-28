@@ -13,8 +13,11 @@ import {
 import { processCampaignJob, recoverQueuedWork } from "@/lib/campaigns/worker";
 import { getEffectiveCredentials } from "@/lib/whatsapp/config";
 
-const HEARTBEAT_INTERVAL_MS = 10_000;
-const RECOVERY_INTERVAL_MS = 30_000;
+// BullMQ's idle long-poll and worker maintenance commands count against managed
+// Redis request quotas. These intervals keep an idle worker well below common
+// entry-tier limits without delaying an actual queued job notification.
+const HEARTBEAT_INTERVAL_MS = 60_000;
+const RECOVERY_INTERVAL_MS = 5 * 60_000;
 const HEALTH_PORT = 1234;
 
 function describeError(error: unknown) {
@@ -151,7 +154,9 @@ async function startWorker() {
       connection,
       concurrency: 1,
       limiter: { max: 1, duration: 1000 },
-      lockDuration: 60_000
+      lockDuration: 60_000,
+      drainDelay: 60,
+      stalledInterval: 120_000
     });
     worker.on("failed", (job, error) => {
       console.error("WhatsApp campaign job failed.", {

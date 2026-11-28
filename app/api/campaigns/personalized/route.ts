@@ -74,7 +74,38 @@ export async function POST(request: NextRequest) {
       );
     }
     if (!inspected.rows.some((row) => row.eligible)) {
-      return NextResponse.json({ error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "Contacts were imported, but no row has a valid number and all required template values." } }, { status: 400 });
+      const duplicateCampaignIds = new Set(
+        inspected.rows
+          .filter((row) => row.duplicateCampaignId)
+          .map((row) => row.duplicateCampaignId)
+      );
+      if (
+        inspected.rows.every((row) => row.eligibilityStatus === "Duplicate Contact") &&
+        duplicateCampaignIds.size === 1
+      ) {
+        const [existingCampaignId] = duplicateCampaignIds;
+        const existingDraft = Types.ObjectId.isValid(existingCampaignId)
+          ? await Campaign.findOne({ _id: existingCampaignId, status: "Draft" }).select("_id").lean()
+          : null;
+        if (existingDraft) {
+          return NextResponse.json({
+            error: {
+              code: "EXISTING_DRAFT_CAMPAIGN",
+              message: "These recipients are already saved in an existing draft campaign. Opening that campaign instead."
+            },
+            campaignId: String(existingDraft._id)
+          }, { status: 409 });
+        }
+      }
+      const allMissingConsent = inspected.summary.noConsentOrOptedOut === inspected.summary.totalRows;
+      return NextResponse.json({
+        error: {
+          code: "NO_ELIGIBLE_RECIPIENTS",
+          message: allMissingConsent
+            ? "Contacts were imported, but none has current documented marketing opt-in. Record consent in Contacts before creating this campaign."
+            : "Contacts were imported, but every row is excluded. Review consent, prior campaigns, phone numbers, category, and required template values."
+        }
+      }, { status: 400 });
     }
     if (!inspected.template) {
       return NextResponse.json({ error: { code: "TEMPLATE_NOT_APPROVED", message: "The selected template is no longer available." } }, { status: 409 });

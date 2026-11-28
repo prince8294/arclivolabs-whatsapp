@@ -26,6 +26,6 @@ export async function GET() {
   const healthy = database && redis && worker;
   return NextResponse.json(
     { status: healthy ? "ok" : "degraded", database, redis, worker },
-    { status: database && redis ? 200 : 503 }
+    { status: healthy ? 200 : 503 }
   );
 }

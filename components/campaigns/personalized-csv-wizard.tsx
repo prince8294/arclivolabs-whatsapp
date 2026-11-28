@@ -194,7 +194,13 @@ export function PersonalizedCsvWizard() {
         })
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error?.message ?? "Campaign could not be created.");
+      if (!response.ok) {
+        if (result.error?.code === "EXISTING_DRAFT_CAMPAIGN" && typeof result.campaignId === "string") {
+          router.push(`/dashboard/bulk-messaging/${result.campaignId}`);
+          return;
+        }
+        throw new Error(result.error?.message ?? "Campaign could not be created.");
+      }
       const startResponse = await fetch(`/api/campaigns/${result.campaignId}/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

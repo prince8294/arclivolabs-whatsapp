@@ -243,14 +243,24 @@ test("a row in a different category is never eligible for the selected campaign"
   assert.equal(rows[0].eligibilityStatus, "Wrong Category");
 });
 
-test("invalid numbers are excluded while valid uploaded rows do not require consent fields", () => {
+test("invalid numbers and recipients without stored documented consent are excluded", () => {
   const rows = evaluateRows([
     policyRow("not a phone", { consentStatus: "Opted In", consentSource: "Website", consentDate: "2026-01-01" }),
     policyRow("+919876543210", { row: 3, consentStatus: "Opted In", consentSource: "Website", consentDate: "2026-01-01" })
   ], new Map()).rows;
   assert.equal(rows[0].eligibilityStatus, "Invalid Number");
-  assert.equal(rows[1].eligibilityStatus, "Ready to Send");
-  assert.equal(rows[1].eligible, true);
+  assert.equal(rows[1].eligibilityStatus, "Missing Consent");
+  assert.equal(rows[1].eligible, false);
+});
+
+test("CSV consent columns never replace CRM consent and stored opt-out remains blocked", () => {
+  const phone = "+919876543210";
+  const rows = evaluateRows(
+    [policyRow(phone, { consentStatus: "Opted In", consentSource: "CSV", consentDate: "2026-01-01" })],
+    new Map([[phone, consentContact(phone, { marketingConsentStatus: "Opted Out" })]])
+  ).rows;
+  assert.equal(rows[0].eligibilityStatus, "Opted Out");
+  assert.equal(rows[0].eligible, false);
 });
 
 test("a recipient added to the suppression list before send is excluded", () => {

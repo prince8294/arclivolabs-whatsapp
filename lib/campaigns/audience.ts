@@ -1,5 +1,5 @@
 import { Types } from "mongoose";
-import { normalizePhoneNumber } from "@/lib/contacts/validation";
+import { hasCurrentDocumentedMarketingConsent, normalizePhoneNumber } from "@/lib/contacts/validation";
 import Contact from "@/lib/models/contact";
 import Category from "@/lib/models/category";
 import MessageSuppression from "@/lib/models/message-suppression";
@@ -96,13 +96,7 @@ export async function* scanAudience(options: AudienceOptions, batchSize = 400): 
         categoryName: categoryNames.get(String(contact.categoryId)) ?? "",
         city: contact.city ?? ""
       };
-      const timestamp = contact.consentTimestamp;
-      const validConsent =
-        contact.marketingConsentStatus === "Opted In" &&
-        Boolean(contact.consentSource?.trim()) &&
-        timestamp instanceof Date &&
-        !Number.isNaN(timestamp.getTime()) &&
-        timestamp.getTime() <= Date.now();
+      const validConsent = hasCurrentDocumentedMarketingConsent(contact);
       let errorCode = "";
       let errorMessage = "";
       if (!validConsent) {

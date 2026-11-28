@@ -4,6 +4,22 @@ import { Types } from "mongoose";
 export const marketingConsentStatuses = ["Unknown", "Opted In", "Opted Out"] as const;
 export type MarketingConsentStatus = (typeof marketingConsentStatuses)[number];
 
+export function hasCurrentDocumentedMarketingConsent(
+  contact: {
+    marketingConsentStatus?: string;
+    consentSource?: string;
+    consentTimestamp?: Date | null;
+  } | null | undefined,
+  now = Date.now()
+) {
+  const timestamp = contact?.consentTimestamp;
+  return contact?.marketingConsentStatus === "Opted In" &&
+    Boolean(contact.consentSource?.trim()) &&
+    timestamp instanceof Date &&
+    !Number.isNaN(timestamp.getTime()) &&
+    timestamp.getTime() <= now;
+}
+
 export type ContactProfileInput = {
   businessName: string;
   contactPerson: string;

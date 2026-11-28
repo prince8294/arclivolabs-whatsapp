@@ -11,7 +11,7 @@ import MessageSuppression from "@/lib/models/message-suppression";
 import MessageTemplate from "@/lib/models/message-template";
 import WhatsAppMessage from "@/lib/models/whatsapp-message";
 import CampaignRecipientReservation from "@/lib/models/campaign-recipient-reservation";
-import { normalizePhoneNumber } from "@/lib/contacts/validation";
+import { hasCurrentDocumentedMarketingConsent, normalizePhoneNumber } from "@/lib/contacts/validation";
 import { getEffectiveCredentials, getStoredConnection, markConnectionError } from "@/lib/whatsapp/config";
 import { graphRequest, MetaApiError } from "@/lib/whatsapp/meta";
 import { extractComponentTemplateVariables } from "@/lib/campaigns/meta-templates";
@@ -118,7 +118,7 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
     return;
   }
   const contact = recipient.contactId ? await Contact.findById(recipient.contactId)
-    .select("phoneNumber categoryId doNotContact")
+    .select("phoneNumber categoryId marketingConsentStatus consentSource consentTimestamp doNotContact")
     .lean() : null;
   const currentPhone = contact ? normalizePhoneNumber(contact.phoneNumber) : null;
   const categoryMatches = Boolean(contact && campaign.categoryIds.some((categoryId) => categoryId.equals(contact.categoryId)));
@@ -137,6 +137,15 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
       recipientId,
       isSuppressed ? "SUPPRESSED" : "CONTACT_UNAVAILABLE",
       isSuppressed ? "Contact is on the suppression list." : "Contact is unavailable or marked Do Not Contact.",
+      "excluded"
+    );
+    return;
+  }
+  if (!hasCurrentDocumentedMarketingConsent(contact)) {
+    await failRecipient(
+      recipientId,
+      "CONSENT_NOT_DOCUMENTED",
+      "Contact does not have current documented marketing opt-in.",
       "excluded"
     );
     return;
@@ -178,7 +187,7 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
 
   const beforeSend = await Campaign.findById(campaignId).select("status").lean();
   const latestContact = recipient.contactId ? await Contact.findById(recipient.contactId)
-    .select("phoneNumber categoryId doNotContact")
+    .select("phoneNumber categoryId marketingConsentStatus consentSource consentTimestamp doNotContact")
     .lean() : null;
   const latestPhone = latestContact ? normalizePhoneNumber(latestContact.phoneNumber) : null;
   const latestSuppression = await MessageSuppression.exists({ phoneNumber: recipient.phoneNumber });
@@ -200,6 +209,15 @@ async function sendRecipient({ campaignId, recipientId }: RecipientData, job: Jo
   );
   if (!latestCategoryMatches) {
     await failRecipient(recipientId, "WRONG_CATEGORY", "Contact no longer belongs to the campaign's selected category.", "excluded");
+    return;
+  }
+  if (!hasCurrentDocumentedMarketingConsent(latestContact)) {
+    await failRecipient(
+      recipientId,
+      "CONSENT_NOT_DOCUMENTED",
+      "Contact no longer has current documented marketing opt-in.",
+      "excluded"
+    );
     return;
   }
   if (!latestContactActive || latestSuppression) {

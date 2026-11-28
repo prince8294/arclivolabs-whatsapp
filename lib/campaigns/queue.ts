@@ -3,7 +3,7 @@ import IORedis from "ioredis";
 
 export const CAMPAIGN_QUEUE_NAME = "arclivo-whatsapp-campaigns";
 export const WORKER_HEARTBEAT_KEY = `${CAMPAIGN_QUEUE_NAME}:worker-heartbeat`;
-export const WORKER_HEARTBEAT_TTL_SECONDS = 45;
+export const WORKER_HEARTBEAT_TTL_SECONDS = 180;
 
 declare global {
   // eslint-disable-next-line no-var

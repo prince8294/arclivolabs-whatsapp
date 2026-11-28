@@ -5,6 +5,7 @@ import { isAdminSessionValid, isSameOriginRequest } from "@/lib/auth/admin-sessi
 import { connectToDatabase } from "@/lib/db/mongodb";
 import Campaign from "@/lib/models/campaign";
 import CampaignRecipient from "@/lib/models/campaign-recipient";
+import Contact from "@/lib/models/contact";
 import MessageTemplate from "@/lib/models/message-template";
 import { getStoredConnection, getEffectiveCredentials, markConnectionError } from "@/lib/whatsapp/config";
 import { MetaApiError } from "@/lib/whatsapp/meta";
@@ -58,8 +59,28 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       return NextResponse.json({ error: { code: "NOT_CONNECTED", message: "Verify the WhatsApp connection before starting a campaign." } }, { status: 409 });
     }
     if (isPersonalizedImport) {
-      const eligible = await CampaignRecipient.countDocuments({ campaignId: campaign._id, queueStatus: "queued" });
-      if (!eligible) return NextResponse.json({ error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "No reviewed recipients are eligible to enter the queue." } }, { status: 400 });
+      const queuedRecipients = await CampaignRecipient.find({ campaignId: campaign._id, queueStatus: "queued" })
+        .select("contactId")
+        .lean();
+      if (!queuedRecipients.length) {
+        return NextResponse.json({ error: { code: "NO_ELIGIBLE_RECIPIENTS", message: "No reviewed recipients are eligible to enter the queue." } }, { status: 400 });
+      }
+      const contactIds = queuedRecipients.flatMap((recipient) => recipient.contactId ? [recipient.contactId] : []);
+      const consentEligible = contactIds.length ? await Contact.exists({
+        _id: { $in: contactIds },
+        marketingConsentStatus: "Opted In",
+        consentSource: { $ne: "" },
+        consentTimestamp: { $type: "date", $lte: new Date() },
+        doNotContact: { $ne: true }
+      }) : null;
+      if (!consentEligible) {
+        return NextResponse.json({
+          error: {
+            code: "NO_ELIGIBLE_RECIPIENTS",
+            message: "No recipient has current documented marketing opt-in. Record consent in Contacts before starting this campaign."
+          }
+        }, { status: 400 });
+      }
     }
     let snapshotCounts: { total: number; eligible: number; excluded: number } | null = null;
     {

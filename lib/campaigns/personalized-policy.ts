@@ -1,4 +1,8 @@
-import { normalizePhoneNumber, type MarketingConsentStatus } from "@/lib/contacts/validation";
+import {
+  hasCurrentDocumentedMarketingConsent,
+  normalizePhoneNumber,
+  type MarketingConsentStatus
+} from "@/lib/contacts/validation";
 
 export type PersonalizedPolicyRow = {
   row: number;
@@ -133,6 +137,12 @@ export function evaluatePersonalizedRows(
       exclusionReason = existing?.doNotContact
         ? "This CRM contact is marked Do Not Contact."
         : "This number is on the permanent suppression list.";
+    } else if (existing?.marketingConsentStatus === "Opted Out") {
+      eligibilityStatus = "Opted Out";
+      exclusionReason = "This CRM contact has opted out of marketing messages.";
+    } else if (!hasCurrentDocumentedMarketingConsent(existing, _now)) {
+      eligibilityStatus = "Missing Consent";
+      exclusionReason = "This CRM contact does not have current documented marketing opt-in.";
     } else if (!template) {
       eligibilityStatus = "Excluded";
       exclusionReason = "Choose a currently approved Meta marketing template.";
