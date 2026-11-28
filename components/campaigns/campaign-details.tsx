@@ -92,7 +92,6 @@ export function CampaignDetails({ campaignId }: { campaignId: string }) {
   useEffect(() => { setPage(1); }, [filter]);
 
   async function action(name: "start" | "pause" | "resume" | "cancel") {
-    if (name === "start" && !window.confirm("Start this campaign now? Only recipients with current documented marketing consent will be queued.")) return;
     if (name === "cancel" && !window.confirm("Cancel this campaign? Unsent recipients will be cancelled; messages already submitted to Meta cannot be recalled.")) return;
     setBusy(true);
     setNotice("");

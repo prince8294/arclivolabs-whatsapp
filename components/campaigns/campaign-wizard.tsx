@@ -63,7 +63,6 @@ export function CampaignWizard({ campaignId: initialCampaignId }: WizardProps) {
   const [templatesError, setTemplatesError] = useState("");
   const [busy, setBusy] = useState<"save" | "start" | "">("");
   const [showAudience, setShowAudience] = useState(false);
-  const [confirmStart, setConfirmStart] = useState(false);
   const [initialized, setInitialized] = useState(!initialCampaignId);
 
   useEffect(() => {
@@ -230,7 +229,7 @@ export function CampaignWizard({ campaignId: initialCampaignId }: WizardProps) {
   function requestStart() {
     const error = validateStepOne() || validateAudience();
     if (error) { setNotice(error); return; }
-    setConfirmStart(true);
+    void startCampaign();
   }
 
   async function persistDraft() {
@@ -269,7 +268,6 @@ export function CampaignWizard({ campaignId: initialCampaignId }: WizardProps) {
   async function startCampaign() {
     setBusy("start");
     setNotice("");
-    setConfirmStart(false);
     try {
       const id = await persistDraft();
       const response = await fetch(`/api/campaigns/${id}/start`, {
@@ -356,7 +354,6 @@ export function CampaignWizard({ campaignId: initialCampaignId }: WizardProps) {
 
       {showAudience && preview && <div role="dialog" aria-modal="true" aria-label="Eligible recipient preview" className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-3 sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowAudience(false); }}><div className="surface max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl shadow-xl"><div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3"><div><h2 className="text-sm font-semibold">Eligible recipient preview</h2><p className="mt-1 text-[10px] text-[var(--muted)]">Showing up to {preview.recipients.length} eligible contacts of {preview.eligibleContacts}.</p></div><button onClick={() => setShowAudience(false)} aria-label="Close preview" className="rounded-lg p-2 hover:bg-[var(--surface-muted)]"><X size={15} /></button></div><div className="max-h-[65vh] overflow-auto"><table className="w-full min-w-[650px] text-left text-xs"><thead className="sticky top-0 bg-[var(--surface-muted)] text-[10px] uppercase text-[var(--muted)]"><tr><th className="px-4 py-2.5">Business</th><th className="px-3 py-2.5">Contact person</th><th className="px-3 py-2.5">WhatsApp number</th><th className="px-3 py-2.5">Category</th><th className="px-4 py-2.5">City</th></tr></thead><tbody className="divide-y divide-[var(--border)]">{preview.recipients.map((recipient)=><tr key={recipient.contactId}><td className="px-4 py-3 font-medium">{recipient.businessName}</td><td className="px-3 py-3">{recipient.contactPerson || "—"}</td><td className="px-3 py-3">{recipient.phoneNumber}</td><td className="px-3 py-3">{recipient.categoryName}</td><td className="px-4 py-3">{recipient.city || "—"}</td></tr>)}</tbody></table></div></div></div>}
 
-      {confirmStart && <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4"><div className="surface w-full max-w-md rounded-2xl p-5 shadow-xl"><h2 id="confirm-title" className="text-sm font-semibold">Start this campaign?</h2><p className="mt-2 text-xs leading-5 text-[var(--muted)]">This will queue up to {preview?.eligibleContacts ?? 0} eligible recipients for <strong className="text-[var(--foreground)]">{selectedTemplate?.name}</strong>. Contacts and consent will be rechecked before each send. Messages already submitted to Meta cannot be recalled.</p><p className="mt-2 text-[10px] text-[var(--muted)]">No message will be sent until you confirm below.</p><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setConfirmStart(false)} className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-semibold">Back</button><button type="button" disabled={Boolean(busy)} onClick={() => void startCampaign()} className="rounded-lg bg-[#128c50] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{busy === "start" ? "Queueing..." : "Confirm & Start"}</button></div></div></div>}
       {!initialized && <span className="sr-only"><LoaderCircle className="animate-spin" /></span>}
     </div>
   );
