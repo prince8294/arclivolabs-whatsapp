@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Pause, Play, RefreshCw, Square, X } from "lucide-react";
+import { ArrowLeft, Pause, Play, RefreshCw, Send, Square, X } from "lucide-react";
 
 type CampaignRecord = {
   _id: string;
@@ -91,16 +91,23 @@ export function CampaignDetails({ campaignId }: { campaignId: string }) {
   }, [load]);
   useEffect(() => { setPage(1); }, [filter]);
 
-  async function action(name: "pause" | "resume" | "cancel") {
+  async function action(name: "start" | "pause" | "resume" | "cancel") {
+    if (name === "start" && !window.confirm("Start this campaign now? Only recipients with current documented marketing consent will be queued.")) return;
     if (name === "cancel" && !window.confirm("Cancel this campaign? Unsent recipients will be cancelled; messages already submitted to Meta cannot be recalled.")) return;
     setBusy(true);
     setNotice("");
     try {
-      const response = await fetch(`/api/campaigns/${campaignId}/${name}`, { method: "POST" });
+      const response = await fetch(`/api/campaigns/${campaignId}/${name}`, {
+        method: "POST",
+        ...(name === "start" ? {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirm: true })
+        } : {})
+      });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message ?? `Campaign could not be ${name}d.`);
       await load();
-      setNotice(`Campaign ${name === "resume" ? "resumed" : `${name}d`}.`);
+      setNotice(name === "start" ? "Campaign started and queued." : `Campaign ${name === "resume" ? "resumed" : `${name}d`}.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : `Campaign could not be ${name}d.`);
     } finally {
@@ -138,10 +145,11 @@ export function CampaignDetails({ campaignId }: { campaignId: string }) {
         <Link href="/dashboard/bulk-messaging" className="mb-3 inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--muted)] hover:text-[var(--foreground)]"><ArrowLeft size={14} /> Campaign history</Link>
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
           <div><div className="flex flex-wrap items-center gap-2"><h1 className="text-[24px] font-semibold tracking-[-0.04em]">{campaign.name}</h1><span className="rounded-full bg-[var(--surface-muted)] px-2.5 py-1 text-[10px] font-semibold">{campaign.status}</span></div><p className="mt-1.5 text-xs text-[var(--muted)]">{campaign.categoryNames.join(", ") || "No categories"} · {campaign.template?.name ?? (campaign.messageMode === "personalized_csv" ? "Exact personalized CSV text" : "No template")} · {campaign.cities.length ? campaign.cities.join(", ") : "All cities"}</p><p className="mt-1 text-[10px] text-[var(--muted)]">Created {new Date(campaign.createdAt).toLocaleString()}{campaign.startedAt ? ` · Started ${new Date(campaign.startedAt).toLocaleString()}` : ""}</p></div>
-          <div className="flex flex-wrap gap-2">{campaign.status === "Draft" && !campaign.importBatchId && <Link href={`/dashboard/bulk-messaging/create?campaignId=${campaign._id}`} className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-semibold">Edit draft</Link>}{active && <button disabled={busy} onClick={() => void action("pause")} className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-semibold disabled:opacity-50"><Pause size={13} /> Pause</button>}{campaign.status === "Paused" && <button disabled={busy} onClick={() => void action("resume")} className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-semibold disabled:opacity-50"><Play size={13} /> Resume</button>}{(active || campaign.status === "Paused") && <button disabled={busy} onClick={() => void action("cancel")} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/30 px-3 py-2 text-xs font-semibold text-rose-600 disabled:opacity-50"><Square size={12} /> Cancel</button>}<button onClick={() => void load()} aria-label="Refresh campaign" className="rounded-lg border border-[var(--border)] p-2 text-[var(--muted)]"><RefreshCw size={14} /></button></div>
+          <div className="flex flex-wrap gap-2">{campaign.status === "Draft" && !campaign.importBatchId && <Link href={`/dashboard/bulk-messaging/create?campaignId=${campaign._id}`} className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-semibold">Edit draft</Link>}{campaign.status === "Draft" && <button disabled={busy} onClick={() => void action("start")} className="inline-flex items-center gap-1.5 rounded-lg bg-[#128c50] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"><Send size={13} /> {busy ? "Starting…" : "Start Campaign"}</button>}{active && <button disabled={busy} onClick={() => void action("pause")} className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-semibold disabled:opacity-50"><Pause size={13} /> Pause</button>}{campaign.status === "Paused" && <button disabled={busy} onClick={() => void action("resume")} className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-semibold disabled:opacity-50"><Play size={13} /> Resume</button>}{(active || campaign.status === "Paused") && <button disabled={busy} onClick={() => void action("cancel")} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/30 px-3 py-2 text-xs font-semibold text-rose-600 disabled:opacity-50"><Square size={12} /> Cancel</button>}<button onClick={() => void load()} aria-label="Refresh campaign" className="rounded-lg border border-[var(--border)] p-2 text-[var(--muted)]"><RefreshCw size={14} /></button></div>
         </div>
       </header>
       {notice && <div role="status" className="flex justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-xs"><span>{notice}</span><button aria-label="Dismiss" onClick={() => setNotice("")}><X size={14} /></button></div>}
+      {campaign.status === "Draft" && <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-800 dark:text-amber-300">This campaign is saved but has not been sent. Use <strong>Start Campaign</strong> above. The app will recheck current documented consent, the approved template, Redis, and worker health before queueing any message.</div>}
       {campaign.errorMessage && <div role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/5 px-4 py-3 text-xs text-rose-700 dark:text-rose-300"><strong>{campaign.errorCode || "Campaign error"}:</strong> {campaign.errorMessage}</div>}
       {campaign.operationalError && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-800 dark:text-amber-300">{campaign.operationalError}</div>}
 
